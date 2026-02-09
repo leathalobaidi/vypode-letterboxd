@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      width: 280px;
+      padding: 20px;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+      color: white;
+    }
+    .logo {
+      font-family: 'Arial Black', sans-serif;
+      font-size: 22px;
+      font-weight: 900;
+      background: linear-gradient(135deg, #ff6b35, #f7931e, #ffcc00);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      letter-spacing: 3px;
+      text-align: center;
+      margin-bottom: 5px;
+    }
+    .subtitle {
+      text-align: center;
+      color: rgba(255,255,255,0.5);
+      font-size: 11px;
+      margin-bottom: 20px;
+    }
+    .instructions {
+      background: rgba(255,255,255,0.05);
+      border-radius: 12px;
+      padding: 15px;
+      margin-bottom: 15px;
+    }
+    .instructions h3 {
+      font-size: 13px;
+      color: #f7931e;
+      margin-bottom: 10px;
+    }
+    .action-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 8px 0;
+      border-bottom: 1px solid rgba(255,255,255,0.1);
+    }
+    .action-row:last-child { border-bottom: none; }
+    .action-icon {
+      width: 28px;
+      height: 28px;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 12px;
+    }
+    .action-icon.watch { background: rgba(255,170,0,0.2); }
+    .action-icon.like { background: rgba(255,75,75,0.2); }
+    .action-icon.watchlist { background: rgba(0,200,83,0.2); }
+    .action-text {
+      flex: 1;
+      font-size: 12px;
+      color: rgba(255,255,255,0.8);
+    }
+    .action-key {
+      font-size: 10px;
+      background: rgba(255,255,255,0.1);
+      padding: 3px 8px;
+      border-radius: 4px;
+      color: rgba(255,255,255,0.6);
+    }
+    .tip {
+      text-align: center;
+      font-size: 11px;
+      color: rgba(255,255,255,0.4);
+      padding: 10px;
+      background: rgba(255,255,255,0.03);
+      border-radius: 8px;
+    }
+    .tip strong { color: #f7931e; }
+  </style>
+</head>
+<body>
+  <div class="logo">VYPODE</div>
+  <div class="subtitle">for Letterboxd</div>
+  
+  <div class="instructions">
+    <h3>🎬 Swipe Controls</h3>
+    <div class="action-row">
+      <div class="action-icon watch">👁️</div>
+      <div class="action-text">Mark as Watched</div>
+      <div class="action-key">← or Left zone</div>
+    </div>
+    <div class="action-row">
+      <div class="action-icon like">❤️</div>
+      <div class="action-text">Like this film</div>
+      <div class="action-key">↑ or Top zone</div>
+    </div>
+    <div class="action-row">
+      <div class="action-icon watchlist">📋</div>
+      <div class="action-text">Add to Watchlist</div>
+      <div class="action-key">→ or Right zone</div>
+    </div>
+  </div>
+  
+  <div class="tip">
+    Visit any <strong>film page</strong> on Letterboxd and click the <strong>🎴 Vypode</strong> button
+  </div>
+</body>
+</html>

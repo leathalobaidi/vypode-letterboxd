@@ -1,0 +1,31 @@
+{
+  "manifest_version": 3,
+  "name": "Vypode for Letterboxd",
+  "version": "1.3.0",
+  "description": "Swipe-style interface for quickly rating and adding films on Letterboxd",
+  "permissions": ["activeTab", "storage"],
+  "host_permissions": ["https://letterboxd.com/*"],
+  "content_scripts": [
+    {
+      "matches": [
+        "https://letterboxd.com/film/*",
+        "https://letterboxd.com/films/*",
+        "https://letterboxd.com/*/films/*",
+        "https://letterboxd.com/*/watchlist/*",
+        "https://letterboxd.com/*/list/*"
+      ],
+      "js": ["content.js"],
+      "css": ["styles.css"],
+      "run_at": "document_idle"
+    }
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Vypode for Letterboxd"
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  }
+}

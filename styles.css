@@ -1,0 +1,755 @@
+/* VYPODE FOR LETTERBOXD - Styles */
+
+/* Toggle Button */
+.vypode-toggle-btn {
+  position: fixed;
+  bottom: 20px;
+  right: 20px;
+  z-index: 99999;
+  background: linear-gradient(135deg, #ff6b35, #f7931e);
+  color: white;
+  border: none;
+  padding: 12px 20px;
+  border-radius: 30px;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  box-shadow: 0 4px 20px rgba(255, 107, 53, 0.4);
+  transition: all 0.3s ease;
+}
+
+.vypode-toggle-btn:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 25px rgba(255, 107, 53, 0.5);
+}
+
+/* Overlay */
+.vypode-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: rgba(0, 0, 0, 0.95);
+  z-index: 999999;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  animation: fadeIn 0.3s ease;
+}
+
+.vypode-overlay.hiding {
+  animation: fadeOut 0.3s ease forwards;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes fadeOut {
+  from { opacity: 1; }
+  to { opacity: 0; }
+}
+
+/* Container */
+.vypode-container {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 20px;
+  padding: 20px;
+}
+
+/* Header */
+.vypode-header {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  width: 100%;
+  max-width: 400px;
+  justify-content: space-between;
+}
+
+.vypode-logo {
+  font-family: 'Arial Black', sans-serif;
+  font-size: 28px;
+  font-weight: 900;
+  background: linear-gradient(135deg, #ff6b35, #f7931e, #ffcc00);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+  letter-spacing: 4px;
+}
+
+.vypode-close {
+  background: rgba(255, 255, 255, 0.1);
+  border: none;
+  color: white;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  font-size: 18px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.vypode-close:hover {
+  background: rgba(255, 255, 255, 0.2);
+  transform: rotate(90deg);
+}
+
+/* Card Area */
+.vypode-card-area {
+  position: relative;
+  width: 320px;
+  height: 480px;
+  perspective: 1000px;
+}
+
+/* Card */
+.vypode-card {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  border-radius: 20px;
+  overflow: hidden;
+  cursor: pointer;
+  transition: transform 0.15s ease;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+}
+
+.vypode-card-bg {
+  position: absolute;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.vypode-card-gradient {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 60%;
+  background: linear-gradient(to top, rgba(0,0,0,0.95), rgba(0,0,0,0.6) 50%, transparent);
+}
+
+/* Glow Edges */
+.vypode-glow-edge {
+  position: absolute;
+  opacity: 0;
+  transition: opacity 0.3s ease;
+  pointer-events: none;
+}
+
+.glow-right {
+  right: 0;
+  top: 0;
+  bottom: 0;
+  width: 100px;
+  background: linear-gradient(to left, rgba(0, 200, 83, 0.6), transparent);
+}
+
+.glow-left {
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 100px;
+  background: linear-gradient(to right, rgba(255, 170, 0, 0.6), transparent);
+}
+
+.glow-up {
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 100px;
+  background: linear-gradient(to bottom, rgba(255, 75, 75, 0.6), transparent);
+}
+
+/* Swipe Overlays */
+.vypode-swipe-overlay {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  font-size: 32px;
+  font-weight: 900;
+  letter-spacing: 4px;
+  opacity: 0;
+  transition: opacity 0.3s ease;
+  text-shadow: 0 2px 10px rgba(0, 0, 0, 0.5);
+  pointer-events: none;
+}
+
+.vypode-swipe-overlay.watch { color: #ffaa00; }
+.vypode-swipe-overlay.like { color: #ff4b4b; font-size: 48px; }
+.vypode-swipe-overlay.watchlist { color: #00c853; }
+
+/* Zone Indicators */
+.vypode-zone-indicator {
+  position: absolute;
+  font-size: 12px;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.4);
+  opacity: 0;
+  transition: all 0.3s ease;
+  pointer-events: none;
+}
+
+.zone-left {
+  left: 10px;
+  top: 50%;
+  transform: translateY(-50%);
+}
+
+.zone-right {
+  right: 10px;
+  top: 50%;
+  transform: translateY(-50%);
+}
+
+.zone-up {
+  top: 15px;
+  left: 50%;
+  transform: translateX(-50%);
+}
+
+.vypode-zone-indicator.active {
+  opacity: 1;
+  color: white;
+}
+
+/* Card Info */
+.vypode-card-info {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  padding: 25px;
+  z-index: 10;
+}
+
+.vypode-card-title {
+  font-size: 24px;
+  font-weight: 700;
+  color: white;
+  margin-bottom: 8px;
+  line-height: 1.2;
+}
+
+.vypode-card-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: rgba(255, 255, 255, 0.7);
+  font-size: 14px;
+  margin-bottom: 10px;
+}
+
+.vypode-rating {
+  color: #ffcc00;
+  font-weight: 600;
+}
+
+.vypode-card-genres {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+
+.vypode-genre-tag {
+  background: rgba(255, 255, 255, 0.15);
+  padding: 4px 10px;
+  border-radius: 12px;
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.8);
+}
+
+.vypode-card-states {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.vypode-state {
+  padding: 4px 10px;
+  border-radius: 12px;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.vypode-state.watched {
+  background: rgba(255, 170, 0, 0.3);
+  color: #ffaa00;
+}
+
+.vypode-state.liked {
+  background: rgba(255, 75, 75, 0.3);
+  color: #ff4b4b;
+}
+
+.vypode-state.watchlist {
+  background: rgba(0, 200, 83, 0.3);
+  color: #00c853;
+}
+
+/* Cursor Ring */
+.vypode-cursor-ring {
+  position: fixed;
+  width: 50px;
+  height: 50px;
+  border: 3px solid rgba(255, 255, 255, 0.5);
+  border-radius: 50%;
+  pointer-events: none;
+  z-index: 1000001;
+  transform: translate(-50%, -50%);
+  transition: all 0.15s ease;
+  opacity: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.vypode-cursor-ring.visible {
+  opacity: 1;
+}
+
+.vypode-cursor-ring.zone-left {
+  border-color: #ffaa00;
+  background: rgba(255, 170, 0, 0.2);
+  box-shadow: 0 0 20px rgba(255, 170, 0, 0.5);
+}
+
+.vypode-cursor-ring.zone-right {
+  border-color: #00c853;
+  background: rgba(0, 200, 83, 0.2);
+  box-shadow: 0 0 20px rgba(0, 200, 83, 0.5);
+}
+
+.vypode-cursor-ring.zone-up {
+  border-color: #ff4b4b;
+  background: rgba(255, 75, 75, 0.2);
+  box-shadow: 0 0 20px rgba(255, 75, 75, 0.5);
+}
+
+.vypode-cursor-label {
+  font-size: 20px;
+}
+
+/* Hints */
+.vypode-hints {
+  display: flex;
+  gap: 30px;
+  margin-top: 10px;
+}
+
+.vypode-hint {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: rgba(255, 255, 255, 0.7);
+  font-size: 13px;
+}
+
+.hint-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+}
+
+.hint-dot.amber { background: #ffaa00; }
+.hint-dot.red { background: #ff4b4b; }
+.hint-dot.green { background: #00c853; }
+
+.vypode-hints-sub {
+  color: rgba(255, 255, 255, 0.4);
+  font-size: 11px;
+  margin-top: 5px;
+}
+
+/* Toast */
+.vypode-toast {
+  position: fixed;
+  bottom: 80px;
+  left: 50%;
+  transform: translateX(-50%) translateY(20px);
+  background: rgba(0, 0, 0, 0.9);
+  color: white;
+  padding: 12px 24px;
+  border-radius: 30px;
+  font-size: 14px;
+  font-weight: 500;
+  z-index: 1000002;
+  opacity: 0;
+  transition: all 0.3s ease;
+  border: 2px solid rgba(255, 255, 255, 0.2);
+}
+
+.vypode-toast.show {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+}
+
+.vypode-toast-watch { border-color: #ffaa00; }
+.vypode-toast-like { border-color: #ff4b4b; }
+.vypode-toast-watchlist { border-color: #00c853; }
+.vypode-toast-error { border-color: #ff4444; color: #ff4444; }
+
+/* Deck Navigation */
+.vypode-deck-nav {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  margin-bottom: 5px;
+}
+
+.vypode-nav-btn {
+  background: rgba(255, 255, 255, 0.1);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  color: white;
+  padding: 8px 16px;
+  border-radius: 20px;
+  font-size: 14px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.vypode-nav-btn:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.2);
+}
+
+.vypode-nav-btn:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+
+.vypode-deck-counter {
+  color: rgba(255, 255, 255, 0.7);
+  font-size: 14px;
+  font-weight: 500;
+  min-width: 80px;
+  text-align: center;
+}
+
+/* Open Film Link */
+.vypode-open-link {
+  display: inline-block;
+  margin-top: 10px;
+  color: rgba(255, 255, 255, 0.6);
+  font-size: 12px;
+  text-decoration: none;
+  transition: color 0.2s ease;
+}
+
+.vypode-open-link:hover {
+  color: #f7931e;
+}
+
+/* Progress Bar */
+.vypode-progress-bar {
+  width: 100%;
+  max-width: 320px;
+  height: 4px;
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 2px;
+  margin-bottom: 10px;
+  overflow: hidden;
+}
+
+.vypode-progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #ff6b35, #f7931e);
+  border-radius: 2px;
+  transition: width 0.3s ease;
+}
+
+/* Skip/Down Zone */
+.glow-down {
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 100px;
+  background: linear-gradient(to top, rgba(100, 150, 255, 0.6), transparent);
+}
+
+.vypode-swipe-overlay.skip {
+  color: #6496ff;
+}
+
+.vypode-cursor-ring.zone-down {
+  border-color: #6496ff;
+  background: rgba(100, 150, 255, 0.2);
+  box-shadow: 0 0 20px rgba(100, 150, 255, 0.5);
+}
+
+.hint-dot.blue {
+  background: #6496ff;
+}
+
+/* Next Page Info */
+.vypode-next-page-info {
+  color: rgba(255, 255, 255, 0.4);
+  font-size: 11px;
+  margin-top: 5px;
+}
+
+/* Card transition for deck mode */
+.vypode-card {
+  transition: transform 0.15s ease, opacity 0.15s ease;
+}
+
+/* Review Button in Header */
+.vypode-review-btn {
+  background: rgba(255, 255, 255, 0.1);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  color: white;
+  padding: 8px 14px;
+  border-radius: 20px;
+  font-size: 13px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  margin-left: auto;
+  margin-right: 10px;
+}
+
+.vypode-review-btn:hover {
+  background: rgba(255, 255, 255, 0.2);
+  border-color: #f7931e;
+}
+
+/* Review Panel */
+.vypode-review-panel {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: rgba(0, 0, 0, 0.9);
+  z-index: 1000010;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  opacity: 0;
+  transition: opacity 0.3s ease;
+}
+
+.vypode-review-panel.visible {
+  opacity: 1;
+}
+
+.vypode-review-content {
+  background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+  border-radius: 20px;
+  padding: 30px;
+  width: 90%;
+  max-width: 500px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.vypode-review-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 25px;
+}
+
+.vypode-review-header h3 {
+  color: white;
+  font-size: 20px;
+  font-weight: 600;
+  margin: 0;
+}
+
+.vypode-review-close {
+  background: rgba(255, 255, 255, 0.1);
+  border: none;
+  color: white;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  font-size: 16px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.vypode-review-close:hover {
+  background: rgba(255, 255, 255, 0.2);
+}
+
+/* Rating Section */
+.vypode-rating-section {
+  margin-bottom: 25px;
+}
+
+.vypode-rating-section label {
+  display: block;
+  color: rgba(255, 255, 255, 0.7);
+  font-size: 13px;
+  margin-bottom: 10px;
+}
+
+.vypode-stars {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 8px;
+}
+
+.vypode-star {
+  background: rgba(255, 255, 255, 0.1);
+  border: none;
+  color: rgba(255, 255, 255, 0.3);
+  width: 36px;
+  height: 36px;
+  border-radius: 8px;
+  font-size: 18px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.vypode-star:hover {
+  background: rgba(255, 200, 0, 0.2);
+  color: #ffc800;
+}
+
+.vypode-star.active {
+  background: rgba(255, 200, 0, 0.3);
+  color: #ffc800;
+}
+
+.vypode-rating-text {
+  color: #ffc800;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+/* Review Section */
+.vypode-review-section {
+  margin-bottom: 25px;
+}
+
+.vypode-review-section label {
+  display: block;
+  color: rgba(255, 255, 255, 0.7);
+  font-size: 13px;
+  margin-bottom: 10px;
+}
+
+.vypode-dictate-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.vypode-mic-btn {
+  background: linear-gradient(135deg, #ff6b35, #f7931e);
+  border: none;
+  color: white;
+  padding: 10px 18px;
+  border-radius: 20px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.vypode-mic-btn:hover {
+  transform: scale(1.05);
+}
+
+.vypode-mic-btn.listening {
+  background: linear-gradient(135deg, #ff4444, #ff6666);
+  animation: pulse 1s infinite;
+}
+
+@keyframes pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(255, 68, 68, 0.4); }
+  50% { box-shadow: 0 0 0 10px rgba(255, 68, 68, 0); }
+}
+
+.vypode-mic-hint {
+  color: rgba(255, 255, 255, 0.4);
+  font-size: 12px;
+}
+
+.vypode-interim {
+  color: rgba(255, 255, 255, 0.5);
+  font-size: 14px;
+  font-style: italic;
+  min-height: 20px;
+  margin-bottom: 8px;
+}
+
+#vypodeReviewText {
+  width: 100%;
+  height: 120px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 12px;
+  padding: 15px;
+  color: white;
+  font-size: 15px;
+  font-family: inherit;
+  resize: vertical;
+  transition: border-color 0.2s ease;
+}
+
+#vypodeReviewText:focus {
+  outline: none;
+  border-color: #f7931e;
+}
+
+#vypodeReviewText::placeholder {
+  color: rgba(255, 255, 255, 0.3);
+}
+
+/* Review Actions */
+.vypode-review-actions {
+  display: flex;
+  gap: 12px;
+  justify-content: flex-end;
+  margin-bottom: 15px;
+}
+
+.vypode-btn {
+  padding: 12px 24px;
+  border-radius: 25px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  border: none;
+}
+
+.vypode-btn-cancel {
+  background: rgba(255, 255, 255, 0.1);
+  color: white;
+}
+
+.vypode-btn-cancel:hover {
+  background: rgba(255, 255, 255, 0.2);
+}
+
+.vypode-btn-submit {
+  background: linear-gradient(135deg, #00c853, #00e676);
+  color: white;
+}
+
+.vypode-btn-submit:hover {
+  transform: scale(1.05);
+}
+
+/* Shortcuts hint */
+.vypode-review-shortcuts {
+  text-align: center;
+  color: rgba(255, 255, 255, 0.4);
+  font-size: 11px;
+}
+
+.vypode-review-shortcuts b {
+  color: rgba(255, 255, 255, 0.6);
+}
