@@ -19,6 +19,10 @@
   let actionIframe = null;
   let iframeTimeout = null;
 
+  // Background action queue — lets user swipe instantly while Letterboxd syncs
+  let actionQueue = [];
+  let isProcessingQueue = false;
+
   // Review & Rating state
   let reviewPanelVisible = false;
   let settingsPanelVisible = false;
@@ -275,22 +279,50 @@
     isProcessingAction = true;
 
     const film = filmDeck[currentDeckIndex];
-    showFeedback(`Processing ${action}...`, action);
 
-    if (actionIframe) actionIframe.remove();
-    actionIframe = document.createElement('iframe');
-    actionIframe.style.cssText = 'position:fixed;top:-9999px;left:-9999px;width:1px;height:1px;opacity:0;pointer-events:none;';
-    document.body.appendChild(actionIframe);
+    // Optimistic update — mark film and persist immediately so the user
+    // can keep swiping without waiting for Letterboxd to respond.
+    if (action === 'watch') film.isWatched = !film.isWatched;
+    else if (action === 'like') film.isLiked = !film.isLiked;
+    else if (action === 'watchlist') film.inWatchlist = !film.inWatchlist;
+    film.actioned = true;
 
-    iframeTimeout = setTimeout(() => {
-      showFeedback('Action timed out — open the film page to act manually', 'error');
-      cleanupIframe();
-      advanceToNextCard();
+    if (film.slug && window.VypodeFilmState) {
+      const flagMap = { watch: 'watched', like: 'liked', watchlist: 'watchlist' };
+      window.VypodeFilmState.setFlag(film.slug, flagMap[action], true, 'userAction');
+    }
+
+    const messages = { watch: 'Marked as watched!', like: 'Liked!', watchlist: 'Added to Watchlist!' };
+    showFeedback(messages[action], action);
+
+    // Advance to the next card right away
+    advanceToNextCard();
+    isProcessingAction = false;
+
+    // Queue the actual Letterboxd action for background processing
+    actionQueue.push({ filmUrl, action });
+    processActionQueue();
+  }
+
+  function processActionQueue() {
+    if (isProcessingQueue || actionQueue.length === 0) return;
+    isProcessingQueue = true;
+
+    const { filmUrl, action } = actionQueue.shift();
+
+    const iframe = document.createElement('iframe');
+    iframe.style.cssText = 'position:fixed;top:-9999px;left:-9999px;width:1px;height:1px;opacity:0;pointer-events:none;';
+    document.body.appendChild(iframe);
+
+    const timeout = setTimeout(() => {
+      iframe.remove();
+      isProcessingQueue = false;
+      processActionQueue();
     }, 10000);
 
-    actionIframe.onload = function() {
+    iframe.onload = function() {
       try {
-        const iframeDoc = actionIframe.contentDocument || actionIframe.contentWindow.document;
+        const iframeDoc = iframe.contentDocument || iframe.contentWindow.document;
 
         setTimeout(() => {
           let btn = null;
@@ -308,43 +340,31 @@
                   iframeDoc.querySelector('.film-watch-list-link-target');
           }
 
-          if (btn) {
-            btn.click();
-            if (action === 'watch') film.isWatched = !film.isWatched;
-            else if (action === 'like') film.isLiked = !film.isLiked;
-            else if (action === 'watchlist') film.inWatchlist = !film.inWatchlist;
-            film.actioned = true;
+          if (btn) btn.click();
 
-            // Persist to FilmState
-            if (film.slug && window.VypodeFilmState) {
-              const flagMap = { watch: 'watched', like: 'liked', watchlist: 'watchlist' };
-              window.VypodeFilmState.setFlag(film.slug, flagMap[action], true, 'userAction');
-            }
-
-            const messages = { watch: 'Marked as watched!', like: 'Liked!', watchlist: 'Added to Watchlist!' };
-            showFeedback(messages[action], action);
-          } else {
-            showFeedback('Could not find button on film page', 'error');
-          }
-
-          setTimeout(() => { cleanupIframe(); advanceToNextCard(); }, 300);
+          setTimeout(() => {
+            clearTimeout(timeout);
+            iframe.remove();
+            isProcessingQueue = false;
+            processActionQueue();
+          }, 300);
         }, 800);
       } catch (e) {
-        console.error('Iframe access blocked:', e.message);
-        showFeedback('Could not act — open the film page manually', 'error');
-        film.actioned = true;
-        cleanupIframe();
-        advanceToNextCard();
+        clearTimeout(timeout);
+        iframe.remove();
+        isProcessingQueue = false;
+        processActionQueue();
       }
     };
 
-    actionIframe.onerror = function() {
-      showFeedback('Error loading film page', 'error');
-      cleanupIframe();
-      advanceToNextCard();
+    iframe.onerror = function() {
+      clearTimeout(timeout);
+      iframe.remove();
+      isProcessingQueue = false;
+      processActionQueue();
     };
 
-    actionIframe.src = filmUrl;
+    iframe.src = filmUrl;
   }
 
   // ── Review submission ───────────────────────────────────────────────
@@ -504,11 +524,20 @@
     } else {
       const nextPageUrl = getNextPageUrl();
       if (nextPageUrl) {
-        showFeedback('Loading next page...', 'watch');
-        setTimeout(() => { window.location.href = nextPageUrl + '#vypode-auto'; }, 1000);
+        showFeedback('Syncing actions & loading next page...', 'watch');
+        waitForQueueDrain(() => { window.location.href = nextPageUrl + '#vypode-auto'; });
       } else {
         showFeedback('All done! No more pages.', 'watchlist');
       }
+    }
+  }
+
+  function waitForQueueDrain(callback, elapsed) {
+    elapsed = elapsed || 0;
+    if ((actionQueue.length === 0 && !isProcessingQueue) || elapsed >= 15000) {
+      callback();
+    } else {
+      setTimeout(function() { waitForQueueDrain(callback, elapsed + 200); }, 200);
     }
   }
 
