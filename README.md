@@ -14,11 +14,43 @@ A Chrome extension that adds a swipe-style interface for quickly rating and mana
 
 ## Installation
 
-1. Open Chrome and go to `chrome://extensions/`
-2. Enable **Developer mode** (toggle in the top-right corner)
-3. Click **Load unpacked**
-4. Select the `Vypode v5.0` folder
-5. The extension is now installed
+### From Chrome Web Store (Recommended)
+*Coming soon — pending review*
+
+### Manual Installation (Developer Mode)
+
+#### Step 1: Download the extension
+
+1. Go to this page: https://github.com/leathalobaidi/vypode-letterboxd
+2. Click the green **Code** button (near the top right)
+3. Click **Download ZIP** from the dropdown menu
+4. The file `vypode-letterboxd-main.zip` will download to your Downloads folder
+5. **Unzip the file** — double-click it on Mac, or right-click → Extract All on Windows
+
+You'll now have a folder called `vypode-letterboxd-main` containing:
+```
+vypode-letterboxd-main/
+├── manifest.json
+├── content.js
+├── background.js
+├── film-state.js
+├── popup.html
+├── styles.css
+├── icons/
+├── supabase-setup.sql
+└── README.md
+```
+
+#### Step 2: Install in Chrome
+
+1. Open Chrome and type `chrome://extensions/` in the address bar
+2. Turn on **Developer mode** (toggle in the top-right corner)
+3. Click **Load unpacked** (button appears after enabling Developer mode)
+4. Navigate to the `vypode-letterboxd-main` folder you unzipped
+5. Select the **entire folder** (the one containing `manifest.json`)
+6. Click **Select Folder**
+
+Done! You'll see the Vypode icon in your Chrome toolbar. Head to any Letterboxd film or listing page to start swiping.
 
 ## How to Use
 
