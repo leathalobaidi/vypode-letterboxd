@@ -351,31 +351,147 @@
 
   function submitReview(filmUrl, reviewText, rating) {
     if (isProcessingAction) return;
+    isProcessingAction = true;
 
-    let fullReview = reviewText || '';
-    const ratingStars = rating > 0 ? '\u2605'.repeat(rating) + '\u2606'.repeat(5 - rating) : '';
+    const fullReview = reviewText || '';
+    if (!fullReview && rating <= 0) {
+      isProcessingAction = false;
+      return;
+    }
 
-    if (fullReview || rating > 0) {
-      const clipboardText = fullReview;
-      navigator.clipboard.writeText(clipboardText).then(() => {
-        if (fullReview) {
-          showFeedback('Review copied! Opening film page...', 'watchlist');
-        } else {
-          showFeedback('Opening film page to rate ' + ratingStars, 'watchlist');
+    showFeedback('Submitting review...', 'watchlist');
+
+    if (actionIframe) actionIframe.remove();
+    actionIframe = document.createElement('iframe');
+    actionIframe.style.cssText = 'position:fixed;top:-9999px;left:-9999px;width:1024px;height:768px;opacity:0;pointer-events:none;';
+    document.body.appendChild(actionIframe);
+
+    iframeTimeout = setTimeout(() => {
+      reviewFallback(filmUrl, fullReview, rating, 'Review timed out');
+    }, 15000);
+
+    actionIframe.onerror = function() {
+      reviewFallback(filmUrl, fullReview, rating, 'Error loading film page');
+    };
+
+    actionIframe.onload = function() {
+      try {
+        const iframeDoc = actionIframe.contentDocument || actionIframe.contentWindow.document;
+
+        setTimeout(() => {
+          const reviewBtn = iframeDoc.querySelector('.add-this-film');
+          if (!reviewBtn) {
+            reviewFallback(filmUrl, fullReview, rating, 'Could not find review button');
+            return;
+          }
+
+          reviewBtn.click();
+
+          let pollCount = 0;
+          const pollInterval = setInterval(() => {
+            pollCount++;
+            const modal = iframeDoc.querySelector('#add-film');
+            if (modal) {
+              clearInterval(pollInterval);
+              fillAndSubmitReview(iframeDoc, modal, filmUrl, fullReview, rating);
+            } else if (pollCount >= 20) {
+              clearInterval(pollInterval);
+              reviewFallback(filmUrl, fullReview, rating, 'Review form did not open');
+            }
+          }, 250);
+        }, 1500);
+      } catch (e) {
+        reviewFallback(filmUrl, fullReview, rating, 'Error accessing film page');
+      }
+    };
+
+    actionIframe.src = filmUrl;
+  }
+
+  function fillAndSubmitReview(iframeDoc, modal, filmUrl, reviewText, rating) {
+    if (reviewText) {
+      const textarea = modal.querySelector('textarea') ||
+                       iframeDoc.querySelector('#diary-entry-review');
+      if (textarea) {
+        textarea.value = reviewText;
+        textarea.dispatchEvent(new Event('input', { bubbles: true }));
+        textarea.dispatchEvent(new Event('change', { bubbles: true }));
+      }
+    }
+
+    if (rating > 0) {
+      const lbRating = rating * 2; // Letterboxd uses half-star scale 1-10
+      const rateWidget = modal.querySelector('.rateit');
+      if (rateWidget && rateWidget.dataset.rateAction) {
+        const csrf = iframeDoc.querySelector('input[name="__csrf"]')?.value;
+        if (csrf) {
+          const ratingData = new FormData();
+          ratingData.set('rating', lbRating);
+          ratingData.set('__csrf', csrf);
+          const rateUrl = rateWidget.dataset.rateAction.startsWith('http')
+            ? rateWidget.dataset.rateAction
+            : new URL(rateWidget.dataset.rateAction, filmUrl).href;
+          fetch(rateUrl, { method: 'POST', body: ratingData }).catch(() => {});
         }
-      }).catch(() => {
-        showFeedback('Opening film page...', 'watch');
-      });
+      }
+      const ratingInput = modal.querySelector('input[name="rating"]');
+      if (ratingInput) {
+        ratingInput.value = lbRating;
+        ratingInput.dispatchEvent(new Event('change', { bubbles: true }));
+      }
     }
 
     setTimeout(() => {
-      window.open(filmUrl, '_blank');
-      hideReviewPanel();
-      if (isListingPage) {
-        filmDeck[currentDeckIndex].actioned = true;
-        advanceToNextCard();
+      const submitBtn = iframeDoc.querySelector('#diary-entry-submit-button') ||
+                        modal.querySelector('input[type="submit"]') ||
+                        modal.querySelector('button[type="submit"]');
+      if (submitBtn) {
+        submitBtn.click();
+        clearTimeout(iframeTimeout);
+        setTimeout(() => {
+          showFeedback('Review submitted!', 'watchlist');
+          cleanupIframe();
+          hideReviewPanel();
+          if (isListingPage) {
+            filmDeck[currentDeckIndex].actioned = true;
+            advanceToNextCard();
+          }
+        }, 2000);
+      } else {
+        reviewFallback(filmUrl, reviewText, rating, 'Could not find submit button');
       }
     }, 500);
+  }
+
+  function reviewFallback(filmUrl, reviewText, rating, reason) {
+    clearTimeout(iframeTimeout);
+    const ratingStars = rating > 0 ? '\u2605'.repeat(rating) + '\u2606'.repeat(5 - rating) : '';
+    const clipboardText = ((ratingStars ? ratingStars + '\n' : '') + reviewText).trim();
+
+    const openPage = () => {
+      setTimeout(() => {
+        window.open(filmUrl, '_blank');
+        cleanupIframe();
+        hideReviewPanel();
+        if (isListingPage) {
+          filmDeck[currentDeckIndex].actioned = true;
+          advanceToNextCard();
+        }
+      }, 500);
+    };
+
+    if (clipboardText) {
+      navigator.clipboard.writeText(clipboardText).then(() => {
+        showFeedback(reason + ' \u2014 review copied, opening film page', 'error');
+        openPage();
+      }).catch(() => {
+        showFeedback(reason + ' \u2014 opening film page', 'error');
+        openPage();
+      });
+    } else {
+      showFeedback(reason + ' \u2014 opening film page', 'error');
+      openPage();
+    }
   }
 
   // ── Deck navigation ─────────────────────────────────────────────────
