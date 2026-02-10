@@ -1,10 +1,13 @@
-// VYPODE FOR LETTERBOXD - Content Script v1.3.2
+// VYPODE FOR LETTERBOXD — Content Script v5.0.0
 // Background actions + auto-advance + auto-next-page + Voice Review + Star Rating
-// v1.3.2: Fixed speech recognition stability, simplified submit to clipboard+open page
+// v5.0.0: FilmState registry, fresh poster filtering, durable skip,
+//         account awareness, collection sync, settings panel, cloud sync
 (function() {
   'use strict';
   if (window.vypodeInjected) return;
   window.vypodeInjected = true;
+
+  // ── Core UI state ───────────────────────────────────────────────────
 
   let currentZone = 'neutral';
   let isOverCard = false;
@@ -14,14 +17,83 @@
   let isListingPage = false;
   let isProcessingAction = false;
   let actionIframe = null;
+  let iframeTimeout = null;
 
   // Review & Rating state
   let reviewPanelVisible = false;
+  let settingsPanelVisible = false;
   let currentRating = 0;
   let recognition = null;
   let isListening = false;
 
-  // Detect page type
+  // Account state
+  let letterboxdUsername = null;
+  let isSyncing = false;
+
+  // Track how many films were filtered so we can show a badge
+  let filteredCount = 0;
+
+  // ── HTML escaping ───────────────────────────────────────────────────
+
+  function escapeHtml(str) {
+    const div = document.createElement('div');
+    div.appendChild(document.createTextNode(str));
+    return div.innerHTML;
+  }
+
+  // ── Account detection ───────────────────────────────────────────────
+  // Letterboxd shows the logged-in username in the nav bar
+
+  function detectLetterboxdUsername() {
+    // Primary: nav profile link
+    const profileLink = document.querySelector('.main-nav a[href*="/"][class*="avatar"]') ||
+                        document.querySelector('a.avatar[href]') ||
+                        document.querySelector('.nav .profile-menu a[href]');
+    if (profileLink) {
+      const match = profileLink.getAttribute('href')?.match(/^\/([^\/]+)\/?$/);
+      if (match) return match[1];
+    }
+
+    // Fallback: look for the username in the header profile area
+    const navItems = document.querySelectorAll('.main-nav a[href]');
+    for (const link of navItems) {
+      const href = link.getAttribute('href');
+      // Profile links are like /username/ with just one path segment
+      if (href && href.match(/^\/[a-zA-Z0-9_]+\/?$/) && !href.match(/^\/(films|lists|members|activity|journal|search|settings|pro|about)\/?$/)) {
+        const text = link.textContent.trim().toLowerCase();
+        const slug = href.replace(/\//g, '');
+        // Confirm it's a profile link by checking if text matches or link has avatar
+        if (link.querySelector('img') || link.classList.contains('avatar') || text === slug) {
+          return slug;
+        }
+      }
+    }
+
+    // Fallback: check body data attribute
+    const body = document.body;
+    if (body.dataset.owner) return body.dataset.owner;
+
+    return null;
+  }
+
+  async function initAccount() {
+    letterboxdUsername = detectLetterboxdUsername();
+    if (letterboxdUsername) {
+      // Store locally
+      chrome.storage.local.set({ vypode_user: { username: letterboxdUsername, detectedAt: new Date().toISOString() } });
+    } else {
+      // Try to load from storage (may have been detected on a previous page)
+      const result = await new Promise(resolve => {
+        chrome.storage.local.get(['vypode_user'], resolve);
+      });
+      if (result.vypode_user?.username) {
+        letterboxdUsername = result.vypode_user.username;
+      }
+    }
+  }
+
+  // ── Page type detection ─────────────────────────────────────────────
+
   function detectPageType() {
     const path = window.location.pathname;
     if (path.match(/^\/film\/[^\/]+\/?$/)) {
@@ -32,7 +104,8 @@
     return 'unknown';
   }
 
-  // Extract film data from single film page
+  // ── Film data extraction ────────────────────────────────────────────
+
   function getFilmData() {
     const titleEl = document.querySelector('h1.headline-1');
     const yearEl = document.querySelector('.releaseyear a');
@@ -40,6 +113,7 @@
     const ratingEl = document.querySelector('.average-rating .display-rating');
     const directorEl = document.querySelector('.contributor a');
     const genreEls = document.querySelectorAll('.text-sluglist a[href*="/films/genre/"]');
+    const slugMatch = window.location.pathname.match(/\/film\/([^\/]+)/);
     return {
       title: titleEl?.textContent?.trim() || 'Unknown Film',
       year: yearEl?.textContent?.trim() || '',
@@ -47,13 +121,14 @@
       rating: ratingEl?.textContent?.trim() || '',
       director: directorEl?.textContent?.trim() || '',
       genres: Array.from(genreEls).slice(0, 3).map(el => el.textContent.trim()),
-      url: window.location.href
+      url: window.location.href,
+      slug: slugMatch?.[1] || null
     };
   }
 
-  // Extract all films from listing page
   function getFilmsFromListing() {
     const films = [];
+    const seen = new Set(); // Dedupe by slug
     const posterContainers = document.querySelectorAll('.poster-container, .film-poster, .poster');
 
     posterContainers.forEach(container => {
@@ -64,6 +139,11 @@
       if (link && img) {
         const href = link.getAttribute('href');
         const filmSlug = href.match(/\/film\/([^\/]+)/)?.[1];
+
+        // Dedupe: skip if we already have this slug
+        if (!filmSlug || seen.has(filmSlug)) return;
+        seen.add(filmSlug);
+
         let title = img.alt || container.getAttribute('data-film-name') || filmSlug?.replace(/-/g, ' ') || 'Unknown';
         title = title.replace(/^Poster for /i, '');
 
@@ -83,6 +163,13 @@
         const isWatched = overlay?.querySelector('.icon-watched.-on, .action.-watched.-checked') !== null;
         const isLiked = overlay?.querySelector('.icon-like.-on, .action.-like.-checked') !== null;
         const inWatchlist = overlay?.querySelector('.icon-watchlist.-on, .action.-watchlist.-checked') !== null;
+
+        // Update FilmState from DOM overlay states
+        if (window.VypodeFilmState) {
+          if (isWatched) window.VypodeFilmState.setFlag(filmSlug, 'watched', true, 'domSync');
+          if (isLiked) window.VypodeFilmState.setFlag(filmSlug, 'liked', true, 'domSync');
+          if (inWatchlist) window.VypodeFilmState.setFlag(filmSlug, 'watchlist', true, 'domSync');
+        }
 
         films.push({
           title: title.charAt(0).toUpperCase() + title.slice(1),
@@ -104,7 +191,16 @@
     return films;
   }
 
-  // Find next page URL
+  // Filter the film deck using the FilmState registry
+  function filterFilmDeck(films) {
+    if (!window.VypodeFilmState) return films;
+
+    const before = films.length;
+    const filtered = films.filter(film => !window.VypodeFilmState.shouldExclude(film.slug));
+    filteredCount = before - filtered.length;
+    return filtered;
+  }
+
   function getNextPageUrl() {
     const nextLink = document.querySelector('.paginate-nextprev a.next') ||
                      document.querySelector('a[rel="next"]') ||
@@ -112,7 +208,8 @@
     return nextLink?.href || null;
   }
 
-  // Find action buttons on single film page
+  // ── Action buttons (single film page) ──────────────────────────────
+
   function findButtons() {
     return {
       watchBtn: document.querySelector('[data-track-action="Watched"]') || document.querySelector('.action.-watch') || document.querySelector('.film-watch-link-target'),
@@ -131,23 +228,48 @@
 
   function performWatch() {
     const buttons = findButtons();
-    if (buttons.watchBtn) { buttons.watchBtn.click(); showFeedback('👁️ Marked as watched!', 'watch'); return true; }
+    if (buttons.watchBtn) {
+      buttons.watchBtn.click();
+      const slug = window.location.pathname.match(/\/film\/([^\/]+)/)?.[1];
+      if (slug && window.VypodeFilmState) window.VypodeFilmState.setFlag(slug, 'watched', true, 'userAction');
+      showFeedback('Marked as watched!', 'watch');
+      return true;
+    }
     showFeedback('Could not find watch button', 'error'); return false;
   }
 
   function performLike() {
     const buttons = findButtons();
-    if (buttons.likeBtn) { buttons.likeBtn.click(); showFeedback('❤️ Liked!', 'like'); return true; }
+    if (buttons.likeBtn) {
+      buttons.likeBtn.click();
+      const slug = window.location.pathname.match(/\/film\/([^\/]+)/)?.[1];
+      if (slug && window.VypodeFilmState) window.VypodeFilmState.setFlag(slug, 'liked', true, 'userAction');
+      showFeedback('Liked!', 'like');
+      return true;
+    }
     showFeedback('Could not find like button', 'error'); return false;
   }
 
   function performWatchlist() {
     const buttons = findButtons();
-    if (buttons.watchlistBtn) { buttons.watchlistBtn.click(); showFeedback('📋 Added to Watchlist!', 'watchlist'); return true; }
+    if (buttons.watchlistBtn) {
+      buttons.watchlistBtn.click();
+      const slug = window.location.pathname.match(/\/film\/([^\/]+)/)?.[1];
+      if (slug && window.VypodeFilmState) window.VypodeFilmState.setFlag(slug, 'watchlist', true, 'userAction');
+      showFeedback('Added to Watchlist!', 'watchlist');
+      return true;
+    }
     showFeedback('Could not find watchlist button', 'error'); return false;
   }
 
-  // Perform action in background via hidden iframe
+  // ── Iframe cleanup + background actions ─────────────────────────────
+
+  function cleanupIframe() {
+    if (iframeTimeout) { clearTimeout(iframeTimeout); iframeTimeout = null; }
+    if (actionIframe) { actionIframe.remove(); actionIframe = null; }
+    isProcessingAction = false;
+  }
+
   function performBackgroundAction(filmUrl, action) {
     if (isProcessingAction) return;
     isProcessingAction = true;
@@ -159,6 +281,12 @@
     actionIframe = document.createElement('iframe');
     actionIframe.style.cssText = 'position:fixed;top:-9999px;left:-9999px;width:1px;height:1px;opacity:0;pointer-events:none;';
     document.body.appendChild(actionIframe);
+
+    iframeTimeout = setTimeout(() => {
+      showFeedback('Action timed out — open the film page to act manually', 'error');
+      cleanupIframe();
+      advanceToNextCard();
+    }, 10000);
 
     actionIframe.onload = function() {
       try {
@@ -186,64 +314,52 @@
             else if (action === 'like') film.isLiked = !film.isLiked;
             else if (action === 'watchlist') film.inWatchlist = !film.inWatchlist;
             film.actioned = true;
-            const messages = { watch: '👁️ Marked as watched!', like: '❤️ Liked!', watchlist: '📋 Added to Watchlist!' };
+
+            // Persist to FilmState
+            if (film.slug && window.VypodeFilmState) {
+              const flagMap = { watch: 'watched', like: 'liked', watchlist: 'watchlist' };
+              window.VypodeFilmState.setFlag(film.slug, flagMap[action], true, 'userAction');
+            }
+
+            const messages = { watch: 'Marked as watched!', like: 'Liked!', watchlist: 'Added to Watchlist!' };
             showFeedback(messages[action], action);
           } else {
-            showFeedback('Could not find button', 'error');
+            showFeedback('Could not find button on film page', 'error');
           }
 
-          setTimeout(() => {
-            if (actionIframe) { actionIframe.remove(); actionIframe = null; }
-            isProcessingAction = false;
-            advanceToNextCard();
-          }, 300);
+          setTimeout(() => { cleanupIframe(); advanceToNextCard(); }, 300);
         }, 800);
       } catch (e) {
-        console.log('Iframe blocked, using fetch fallback');
-        performFetchAction(filmUrl, action, film);
+        console.error('Iframe access blocked:', e.message);
+        showFeedback('Could not act — open the film page manually', 'error');
+        film.actioned = true;
+        cleanupIframe();
+        advanceToNextCard();
       }
     };
 
     actionIframe.onerror = function() {
-      isProcessingAction = false;
-      showFeedback('Error loading film', 'error');
-      if (actionIframe) { actionIframe.remove(); actionIframe = null; }
+      showFeedback('Error loading film page', 'error');
+      cleanupIframe();
+      advanceToNextCard();
     };
 
     actionIframe.src = filmUrl;
   }
 
-  async function performFetchAction(filmUrl, action, film) {
-    try {
-      film.actioned = true;
-      const messages = { watch: '👁️ Watched (will sync)', like: '❤️ Liked (will sync)', watchlist: '📋 Watchlist (will sync)' };
-      showFeedback(messages[action], action);
-      if (action === 'watch') film.isWatched = true;
-      else if (action === 'like') film.isLiked = true;
-      else if (action === 'watchlist') film.inWatchlist = true;
-    } catch (e) {
-      showFeedback('Error: ' + e.message, 'error');
-    } finally {
-      if (actionIframe) { actionIframe.remove(); actionIframe = null; }
-      isProcessingAction = false;
-      advanceToNextCard();
-    }
-  }
+  // ── Review submission ───────────────────────────────────────────────
 
-  // Submit review - copies to clipboard and opens film page
   function submitReview(filmUrl, reviewText, rating) {
     if (isProcessingAction) return;
 
-    // Build review text with rating
     let fullReview = reviewText || '';
-    const ratingStars = rating > 0 ? '★'.repeat(rating) + '☆'.repeat(5 - rating) : '';
+    const ratingStars = rating > 0 ? '\u2605'.repeat(rating) + '\u2606'.repeat(5 - rating) : '';
 
-    // Copy to clipboard
     if (fullReview || rating > 0) {
       const clipboardText = fullReview;
       navigator.clipboard.writeText(clipboardText).then(() => {
         if (fullReview) {
-          showFeedback('📋 Review copied! Opening film page...', 'watchlist');
+          showFeedback('Review copied! Opening film page...', 'watchlist');
         } else {
           showFeedback('Opening film page to rate ' + ratingStars, 'watchlist');
         }
@@ -252,8 +368,6 @@
       });
     }
 
-    // Open the film page to log/review
-    const reviewUrl = filmUrl.replace(/\/?$/, '') + '/reviews/';
     setTimeout(() => {
       window.open(filmUrl, '_blank');
       hideReviewPanel();
@@ -263,6 +377,8 @@
       }
     }, 500);
   }
+
+  // ── Deck navigation ─────────────────────────────────────────────────
 
   function advanceToNextCard() {
     if (currentDeckIndex < filmDeck.length - 1) {
@@ -275,13 +391,21 @@
         showFeedback('Loading next page...', 'watch');
         setTimeout(() => { window.location.href = nextPageUrl + '#vypode-auto'; }, 1000);
       } else {
-        showFeedback('🎉 All done! No more pages.', 'watchlist');
+        showFeedback('All done! No more pages.', 'watchlist');
       }
     }
   }
 
   function skipCurrentFilm() {
-    filmDeck[currentDeckIndex].actioned = true;
+    const film = filmDeck[currentDeckIndex];
+    film.actioned = true;
+
+    // Durable skip: persist to FilmState
+    if (film.slug && window.VypodeFilmState) {
+      window.VypodeFilmState.setFlag(film.slug, 'skipped', true, 'userAction');
+    }
+
+    showFeedback('Skipped', 'skip');
     advanceToNextCard();
   }
 
@@ -303,70 +427,218 @@
     if (progress) progress.style.width = ((currentDeckIndex + 1) / filmDeck.length) * 100 + '%';
   }
 
+  // ==================== COLLECTION SYNC ENGINE ====================
+
+  async function runCollectionSync() {
+    if (!letterboxdUsername) {
+      showFeedback('No Letterboxd account detected — log in first', 'error');
+      return { success: false, error: 'Not logged in' };
+    }
+    if (isSyncing) {
+      showFeedback('Sync already in progress...', 'watch');
+      return { success: false, error: 'Already syncing' };
+    }
+
+    isSyncing = true;
+    updateSyncUI('syncing');
+    showFeedback('Syncing your Letterboxd collections...', 'watch');
+    const startTime = Date.now();
+
+    try {
+      const results = { watched: 0, watchlist: 0, liked: 0 };
+
+      // 1. Sync watched films from /{username}/films/
+      const watchedSlugs = await fetchAllFilmSlugs(`/${letterboxdUsername}/films/`);
+      results.watched = watchedSlugs.length;
+
+      // 2. Sync watchlist from /{username}/watchlist/
+      const watchlistSlugs = await fetchAllFilmSlugs(`/${letterboxdUsername}/watchlist/`);
+      results.watchlist = watchlistSlugs.length;
+
+      // 3. Sync liked films from /{username}/likes/films/
+      const likedSlugs = await fetchAllFilmSlugs(`/${letterboxdUsername}/likes/films/`);
+      results.liked = likedSlugs.length;
+
+      // Build bulk update map
+      const slugMap = {};
+      for (const slug of watchedSlugs) {
+        if (!slugMap[slug]) slugMap[slug] = {};
+        slugMap[slug].watched = true;
+      }
+      for (const slug of watchlistSlugs) {
+        if (!slugMap[slug]) slugMap[slug] = {};
+        slugMap[slug].watchlist = true;
+      }
+      for (const slug of likedSlugs) {
+        if (!slugMap[slug]) slugMap[slug] = {};
+        slugMap[slug].liked = true;
+      }
+
+      // Apply to local registry
+      const updated = window.VypodeFilmState.bulkSetFromSync(slugMap, 'collectionSync');
+
+      const duration = Date.now() - startTime;
+      window.VypodeFilmState.setSyncMeta(new Date().toISOString(), duration, results);
+
+      isSyncing = false;
+      updateSyncUI('done');
+      showFeedback(`Sync complete: ${results.watched} watched, ${results.watchlist} watchlist, ${results.liked} liked`, 'watchlist');
+
+      // Push to cloud if signed in
+      try {
+        chrome.runtime.sendMessage({ type: 'vypode', action: 'cloudPush' });
+      } catch (e) { /* background may not be ready */ }
+
+      return { success: true, results, updated, duration };
+
+    } catch (e) {
+      isSyncing = false;
+      updateSyncUI('error');
+      showFeedback('Sync failed: ' + e.message, 'error');
+      return { success: false, error: e.message };
+    }
+  }
+
+  // Fetch all film slugs from paginated Letterboxd pages
+  async function fetchAllFilmSlugs(basePath) {
+    const slugs = [];
+    let page = 1;
+    const maxPages = 100; // Safety cap: 100 pages x 72 films = 7,200 films max
+
+    while (page <= maxPages) {
+      const url = `https://letterboxd.com${basePath}page/${page}/`;
+
+      // Rate limit: 1 request per second
+      if (page > 1) await sleep(1000);
+
+      try {
+        const response = await fetch(url, { credentials: 'same-origin' });
+        if (!response.ok) break;
+
+        const html = await response.text();
+        const parser = new DOMParser();
+        const doc = parser.parseFromString(html, 'text/html');
+
+        // Extract film slugs from poster links
+        const links = doc.querySelectorAll('a[href*="/film/"]');
+        let foundOnPage = 0;
+
+        for (const link of links) {
+          const match = link.getAttribute('href')?.match(/\/film\/([^\/]+)/);
+          if (match && match[1]) {
+            const slug = match[1];
+            if (!slugs.includes(slug)) {
+              slugs.push(slug);
+              foundOnPage++;
+            }
+          }
+        }
+
+        // Stop condition: no films found (empty page = past the end)
+        if (foundOnPage === 0) break;
+
+        // Stop condition: no next page link
+        const hasNext = doc.querySelector('.paginate-nextprev a.next') ||
+                        doc.querySelector('a[rel="next"]');
+        if (!hasNext) break;
+
+        page++;
+      } catch (e) {
+        console.warn('Vypode sync: failed to fetch page', page, e);
+        break;
+      }
+    }
+
+    return slugs;
+  }
+
+  function sleep(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
+  }
+
+  function updateSyncUI(state) {
+    const syncBtn = document.getElementById('vypodeSyncBtn');
+    const syncStatus = document.getElementById('vypodeSyncStatus');
+    if (syncBtn) {
+      syncBtn.disabled = state === 'syncing';
+      syncBtn.textContent = state === 'syncing' ? 'Syncing...' : 'Sync now';
+    }
+    if (syncStatus) {
+      if (state === 'syncing') {
+        syncStatus.textContent = 'Syncing your collections...';
+        syncStatus.style.color = '#f7931e';
+      } else if (state === 'done') {
+        const meta = window.VypodeFilmState?.getMeta();
+        syncStatus.textContent = meta?.lastSyncAt ? `Last sync: ${formatTimeAgo(meta.lastSyncAt)}` : 'Sync complete';
+        syncStatus.style.color = '#00c853';
+      } else if (state === 'error') {
+        syncStatus.textContent = 'Sync failed — try again';
+        syncStatus.style.color = '#ff4444';
+      }
+    }
+  }
+
+  function formatTimeAgo(isoString) {
+    const diff = Date.now() - new Date(isoString).getTime();
+    const mins = Math.floor(diff / 60000);
+    if (mins < 1) return 'just now';
+    if (mins < 60) return `${mins}m ago`;
+    const hours = Math.floor(mins / 60);
+    if (hours < 24) return `${hours}h ago`;
+    const days = Math.floor(hours / 24);
+    return `${days}d ago`;
+  }
+
+  // ── Listen for background messages ──────────────────────────────────
+
+  chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+    if (msg.type !== 'vypode') return;
+    if (msg.action === 'triggerSync') {
+      // Background alarm triggered a sync
+      runCollectionSync();
+    }
+  });
+
   // ==================== REVIEW PANEL ====================
 
   function initSpeechRecognition() {
-    if (!('webkitSpeechRecognition' in window) && !('SpeechRecognition' in window)) {
-      return null;
-    }
+    if (!('webkitSpeechRecognition' in window) && !('SpeechRecognition' in window)) return null;
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     recognition = new SpeechRecognition();
-    recognition.continuous = false; // Use non-continuous mode for stability
+    recognition.continuous = false;
     recognition.interimResults = true;
     recognition.lang = 'en-GB';
-    recognition._shouldRestart = false;
 
     recognition.onresult = (event) => {
       const textarea = document.getElementById('vypodeReviewText');
       if (!textarea) return;
-
       let finalTranscript = '';
       let interimTranscript = '';
-
       for (let i = event.resultIndex; i < event.results.length; i++) {
         const transcript = event.results[i][0].transcript;
-        if (event.results[i].isFinal) {
-          finalTranscript += transcript + ' ';
-        } else {
-          interimTranscript = transcript;
-        }
+        if (event.results[i].isFinal) finalTranscript += transcript + ' ';
+        else interimTranscript = transcript;
       }
-
-      if (finalTranscript) {
-        textarea.value += finalTranscript;
-      }
-
+      if (finalTranscript) textarea.value += finalTranscript;
       const interim = document.getElementById('vypodeInterim');
       if (interim) interim.textContent = interimTranscript;
     };
 
     recognition.onerror = (event) => {
-      console.log('Speech recognition error:', event.error);
-      // Only stop on fatal errors
       if (event.error === 'not-allowed') {
         showFeedback('Microphone access denied - check browser permissions', 'error');
         isListening = false;
         updateMicButton();
-      } else if (event.error === 'no-speech') {
-        // This is normal - just means silence, will auto-restart
-        console.log('No speech detected, will restart...');
       }
-      // Don't call stopListening here - let onend handle restart
     };
 
     recognition.onend = () => {
       const interim = document.getElementById('vypodeInterim');
       if (interim) interim.textContent = '';
-
-      // Restart if we're still supposed to be listening
       if (isListening) {
         setTimeout(() => {
           if (isListening && recognition) {
-            try {
-              recognition.start();
-            } catch(e) {
-              console.log('Restart failed:', e);
-            }
+            try { recognition.start(); } catch(e) {}
           }
         }, 100);
       }
@@ -376,25 +648,15 @@
   }
 
   function startListening() {
-    // Create fresh recognition instance each time
-    if (recognition) {
-      try { recognition.stop(); } catch(e) {}
-    }
+    if (recognition) { try { recognition.stop(); } catch(e) {} }
     recognition = initSpeechRecognition();
-
-    if (!recognition) {
-      showFeedback('Speech recognition not supported in this browser', 'error');
-      return;
-    }
-
+    if (!recognition) { showFeedback('Speech recognition not supported in this browser', 'error'); return; }
     isListening = true;
     updateMicButton();
-
     try {
       recognition.start();
-      showFeedback('🎤 Listening... speak now', 'like');
+      showFeedback('Listening... speak now', 'like');
     } catch (e) {
-      console.error('Could not start recognition:', e);
       isListening = false;
       updateMicButton();
       showFeedback('Could not start microphone', 'error');
@@ -410,22 +672,18 @@
     updateMicButton();
     const interim = document.getElementById('vypodeInterim');
     if (interim) interim.textContent = '';
-    showFeedback('🛑 Stopped listening', 'watch');
   }
 
   function toggleListening() {
-    if (isListening) {
-      stopListening();
-    } else {
-      startListening();
-    }
+    if (isListening) stopListening();
+    else startListening();
   }
 
   function updateMicButton() {
     const micBtn = document.getElementById('vypodeMicBtn');
     if (micBtn) {
       micBtn.classList.toggle('listening', isListening);
-      micBtn.innerHTML = isListening ? '🔴 Recording...' : '🎤 Dictate';
+      micBtn.textContent = isListening ? 'Recording...' : 'Dictate';
     }
   }
 
@@ -437,19 +695,12 @@
   function updateRatingDisplay() {
     const starContainer = document.getElementById('vypodeStars');
     if (!starContainer) return;
-
-    const starBtns = starContainer.querySelectorAll('.vypode-star');
-    starBtns.forEach((btn, i) => {
+    starContainer.querySelectorAll('.vypode-star').forEach((btn, i) => {
       btn.classList.toggle('active', i < currentRating);
     });
-
     const ratingText = document.getElementById('vypodeRatingText');
     if (ratingText) {
-      if (currentRating > 0) {
-        ratingText.textContent = '★'.repeat(currentRating) + ' (' + currentRating + '/5)';
-      } else {
-        ratingText.textContent = 'No rating';
-      }
+      ratingText.textContent = currentRating > 0 ? '\u2605'.repeat(currentRating) + ' (' + currentRating + '/5)' : 'No rating';
     }
   }
 
@@ -459,41 +710,38 @@
     currentRating = 0;
 
     const film = isListingPage ? filmDeck[currentDeckIndex] : getFilmData();
+    const safeTitle = escapeHtml(film.title);
 
     const panel = document.createElement('div');
     panel.className = 'vypode-review-panel';
     panel.innerHTML = `
       <div class="vypode-review-content">
         <div class="vypode-review-header">
-          <h3>Review: ${film.title}</h3>
-          <button class="vypode-review-close" id="vypodeReviewClose">✕</button>
+          <h3>Review: ${safeTitle}</h3>
+          <button class="vypode-review-close" id="vypodeReviewClose">\u2715</button>
         </div>
-
         <div class="vypode-rating-section">
-          <label>Rating (press 1-5 for stars):</label>
+          <label>Rating (click stars or press 1-5 when not typing):</label>
           <div class="vypode-stars" id="vypodeStars">
-            ${[1,2,3,4,5].map(i => `<button class="vypode-star" data-rating="${i}">★</button>`).join('')}
+            ${[1,2,3,4,5].map(i => `<button class="vypode-star" data-rating="${i}">\u2605</button>`).join('')}
           </div>
           <span class="vypode-rating-text" id="vypodeRatingText">No rating</span>
         </div>
-
         <div class="vypode-review-section">
           <label>Your review:</label>
           <div class="vypode-dictate-row">
-            <button class="vypode-mic-btn" id="vypodeMicBtn">🎤 Dictate</button>
+            <button class="vypode-mic-btn" id="vypodeMicBtn">Dictate</button>
             <span class="vypode-mic-hint">or just type below</span>
           </div>
           <div class="vypode-interim" id="vypodeInterim"></div>
           <textarea id="vypodeReviewText" placeholder="Write or dictate your review here..."></textarea>
         </div>
-
         <div class="vypode-review-actions">
           <button class="vypode-btn vypode-btn-cancel" id="vypodeReviewCancel">Cancel</button>
           <button class="vypode-btn vypode-btn-submit" id="vypodeReviewSubmit">Submit Review</button>
         </div>
-
         <div class="vypode-review-shortcuts">
-          <span>Shortcuts: <b>1-5</b> stars • <b>Shift</b> toggle panel • <b>Enter</b> submit • <b>Esc</b> close</span>
+          <span>Shortcuts: <b>1-5</b> stars (when not typing) &bull; <b>Esc</b> close &bull; <b>Enter</b> submit</span>
         </div>
       </div>
     `;
@@ -501,22 +749,16 @@
     document.body.appendChild(panel);
     setTimeout(() => panel.classList.add('visible'), 10);
 
-    // Event listeners
     document.getElementById('vypodeReviewClose').addEventListener('click', hideReviewPanel);
     document.getElementById('vypodeReviewCancel').addEventListener('click', hideReviewPanel);
     document.getElementById('vypodeMicBtn').addEventListener('click', toggleListening);
-
     document.getElementById('vypodeReviewSubmit').addEventListener('click', () => {
       const reviewText = document.getElementById('vypodeReviewText').value.trim();
       const filmUrl = isListingPage ? filmDeck[currentDeckIndex].url : window.location.href;
       submitReview(filmUrl, reviewText, currentRating);
     });
-
-    // Star rating clicks
     document.querySelectorAll('.vypode-star').forEach(btn => {
-      btn.addEventListener('click', () => {
-        setRating(parseInt(btn.dataset.rating));
-      });
+      btn.addEventListener('click', () => setRating(parseInt(btn.dataset.rating)));
     });
   }
 
@@ -524,10 +766,306 @@
     reviewPanelVisible = false;
     stopListening();
     const panel = document.querySelector('.vypode-review-panel');
-    if (panel) {
-      panel.classList.remove('visible');
-      setTimeout(() => panel.remove(), 300);
+    if (panel) { panel.classList.remove('visible'); setTimeout(() => panel.remove(), 300); }
+  }
+
+  function isUserTyping() {
+    const el = document.activeElement;
+    if (!el) return false;
+    const tag = el.tagName;
+    if (tag === 'TEXTAREA' || tag === 'INPUT') return true;
+    if (el.isContentEditable) return true;
+    return false;
+  }
+
+  // ==================== SETTINGS PANEL ====================
+
+  function showSettingsPanel() {
+    if (settingsPanelVisible) return;
+    settingsPanelVisible = true;
+
+    const prefs = window.VypodeFilmState?.getPrefs() || {};
+    const meta = window.VypodeFilmState?.getMeta() || {};
+    const stats = window.VypodeFilmState?.getStats() || {};
+    const lastSync = meta.lastSyncAt ? formatTimeAgo(meta.lastSyncAt) : 'Never';
+    const safeUsername = letterboxdUsername ? escapeHtml(letterboxdUsername) : null;
+
+    const panel = document.createElement('div');
+    panel.className = 'vypode-settings-panel';
+    panel.innerHTML = `
+      <div class="vypode-settings-content">
+        <div class="vypode-settings-header">
+          <h3>Settings</h3>
+          <button class="vypode-review-close" id="vypodeSettingsClose">\u2715</button>
+        </div>
+
+        <!-- Account Section -->
+        <div class="vypode-settings-section">
+          <div class="vypode-settings-section-title">Letterboxd Account</div>
+          ${safeUsername
+            ? `<div class="vypode-account-row">
+                <span class="vypode-account-avatar">\ud83d\udc64</span>
+                <span class="vypode-account-name">${safeUsername}</span>
+                <span class="vypode-account-badge">Linked</span>
+              </div>`
+            : `<div class="vypode-account-row">
+                <span class="vypode-account-warn">\u26a0\ufe0f Not logged in to Letterboxd</span>
+              </div>
+              <div class="vypode-settings-hint">Log in to Letterboxd and refresh to link your account.</div>`
+          }
+        </div>
+
+        <!-- Sync Section -->
+        <div class="vypode-settings-section">
+          <div class="vypode-settings-section-title">Collection Sync</div>
+          <div class="vypode-sync-row">
+            <span id="vypodeSyncStatus" class="vypode-sync-status">Last sync: ${escapeHtml(lastSync)}</span>
+            <button class="vypode-sync-btn" id="vypodeSyncBtn" ${!safeUsername ? 'disabled' : ''}>Sync now</button>
+          </div>
+          ${meta.syncCounts ? `<div class="vypode-sync-counts">
+            ${meta.syncCounts.watched || 0} watched &bull; ${meta.syncCounts.watchlist || 0} watchlist &bull; ${meta.syncCounts.liked || 0} liked
+          </div>` : ''}
+          <div class="vypode-settings-hint">Syncs your watched, liked, and watchlist films from Letterboxd. Auto-syncs once per day.</div>
+        </div>
+
+        <!-- Filter Section -->
+        <div class="vypode-settings-section">
+          <div class="vypode-settings-section-title">Deck Filters</div>
+          <div class="vypode-settings-hint">Films matching these filters are hidden from the deck.</div>
+          <label class="vypode-toggle-row">
+            <span>Hide watched films</span>
+            <input type="checkbox" class="vypode-toggle" data-pref="excludeWatched" ${prefs.excludeWatched !== false ? 'checked' : ''}>
+            <span class="vypode-toggle-slider"></span>
+          </label>
+          <label class="vypode-toggle-row">
+            <span>Hide liked films</span>
+            <input type="checkbox" class="vypode-toggle" data-pref="excludeLiked" ${prefs.excludeLiked !== false ? 'checked' : ''}>
+            <span class="vypode-toggle-slider"></span>
+          </label>
+          <label class="vypode-toggle-row">
+            <span>Hide watchlist films</span>
+            <input type="checkbox" class="vypode-toggle" data-pref="excludeWatchlist" ${prefs.excludeWatchlist !== false ? 'checked' : ''}>
+            <span class="vypode-toggle-slider"></span>
+          </label>
+          <label class="vypode-toggle-row">
+            <span>Hide skipped films</span>
+            <input type="checkbox" class="vypode-toggle" data-pref="excludeSkipped" ${prefs.excludeSkipped !== false ? 'checked' : ''}>
+            <span class="vypode-toggle-slider"></span>
+          </label>
+        </div>
+
+        <!-- Stats Section -->
+        <div class="vypode-settings-section">
+          <div class="vypode-settings-section-title">Your Film Registry</div>
+          <div class="vypode-stats-grid">
+            <div class="vypode-stat"><span class="vypode-stat-num">${stats.total || 0}</span><span class="vypode-stat-label">Total</span></div>
+            <div class="vypode-stat"><span class="vypode-stat-num vypode-stat-watched">${stats.watched || 0}</span><span class="vypode-stat-label">Watched</span></div>
+            <div class="vypode-stat"><span class="vypode-stat-num vypode-stat-liked">${stats.liked || 0}</span><span class="vypode-stat-label">Liked</span></div>
+            <div class="vypode-stat"><span class="vypode-stat-num vypode-stat-watchlist">${stats.watchlist || 0}</span><span class="vypode-stat-label">Watchlist</span></div>
+            <div class="vypode-stat"><span class="vypode-stat-num vypode-stat-skipped">${stats.skipped || 0}</span><span class="vypode-stat-label">Skipped</span></div>
+          </div>
+        </div>
+
+        <!-- Cloud Section -->
+        <div class="vypode-settings-section">
+          <div class="vypode-settings-section-title">Cloud Backup</div>
+          <div id="vypodeCloudStatus" class="vypode-cloud-status">Checking...</div>
+          <div class="vypode-cloud-actions">
+            <button class="vypode-settings-btn" id="vypodeCloudSignIn">Sign in with Google</button>
+            <button class="vypode-settings-btn vypode-btn-secondary" id="vypodeCloudPull" disabled>Restore from cloud</button>
+            <button class="vypode-settings-btn vypode-btn-secondary" id="vypodeCloudPush" disabled>Back up to cloud</button>
+          </div>
+          <div class="vypode-settings-hint">Sign in to back up your film registry across devices.</div>
+        </div>
+
+        <!-- Data Section -->
+        <div class="vypode-settings-section">
+          <div class="vypode-settings-section-title">Data</div>
+          <div class="vypode-data-actions">
+            <button class="vypode-settings-btn vypode-btn-secondary" id="vypodeExport">Export data</button>
+            <button class="vypode-settings-btn vypode-btn-secondary" id="vypodeImport">Import data</button>
+            <button class="vypode-settings-btn vypode-btn-danger" id="vypodeClearSkipped">Clear skipped</button>
+            <button class="vypode-settings-btn vypode-btn-danger" id="vypodeClearAll">Clear all data</button>
+          </div>
+          <input type="file" id="vypodeImportFile" accept=".json" style="display:none">
+        </div>
+
+        <div class="vypode-settings-footer">Vypode v5.0.0</div>
+      </div>
+    `;
+
+    document.body.appendChild(panel);
+    setTimeout(() => panel.classList.add('visible'), 10);
+
+    // Wire up event listeners
+    document.getElementById('vypodeSettingsClose').addEventListener('click', hideSettingsPanel);
+    document.getElementById('vypodeSyncBtn')?.addEventListener('click', () => runCollectionSync());
+
+    // Filter toggles
+    panel.querySelectorAll('.vypode-toggle').forEach(toggle => {
+      toggle.addEventListener('change', () => {
+        const pref = toggle.dataset.pref;
+        window.VypodeFilmState?.setPref(pref, toggle.checked);
+      });
+    });
+
+    // Cloud status check
+    checkCloudStatus();
+
+    // Cloud sign in
+    document.getElementById('vypodeCloudSignIn').addEventListener('click', async () => {
+      const btn = document.getElementById('vypodeCloudSignIn');
+      btn.textContent = 'Signing in...';
+      btn.disabled = true;
+      try {
+        const result = await sendToBackground('cloudSignIn');
+        if (result.success) {
+          showFeedback('Signed in to cloud: ' + result.email, 'watchlist');
+          checkCloudStatus();
+        } else {
+          showFeedback('Sign in failed: ' + (result.error || 'Unknown error'), 'error');
+          btn.textContent = 'Sign in with Google';
+          btn.disabled = false;
+        }
+      } catch (e) {
+        showFeedback('Sign in failed', 'error');
+        btn.textContent = 'Sign in with Google';
+        btn.disabled = false;
+      }
+    });
+
+    // Cloud pull
+    document.getElementById('vypodeCloudPull').addEventListener('click', async () => {
+      showFeedback('Restoring from cloud...', 'watch');
+      try {
+        const result = await sendToBackground('cloudPull');
+        if (result.success && result.registry) {
+          const merged = window.VypodeFilmState.mergeFromCloud(result.registry);
+          showFeedback(`Restored ${result.count} films from cloud (${merged} updated)`, 'watchlist');
+        } else {
+          showFeedback('Restore failed: ' + (result.error || 'No data'), 'error');
+        }
+      } catch (e) {
+        showFeedback('Restore failed', 'error');
+      }
+    });
+
+    // Cloud push
+    document.getElementById('vypodeCloudPush').addEventListener('click', async () => {
+      showFeedback('Backing up to cloud...', 'watch');
+      try {
+        const result = await sendToBackground('cloudPush');
+        if (result.success) {
+          showFeedback(`Backed up ${result.count} films to cloud`, 'watchlist');
+        } else {
+          showFeedback('Backup failed: ' + (result.error || 'Unknown'), 'error');
+        }
+      } catch (e) {
+        showFeedback('Backup failed', 'error');
+      }
+    });
+
+    // Export
+    document.getElementById('vypodeExport').addEventListener('click', () => {
+      const data = window.VypodeFilmState.exportData();
+      const blob = new Blob([data], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `vypode-export-${new Date().toISOString().slice(0,10)}.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+      showFeedback('Data exported', 'watchlist');
+    });
+
+    // Import
+    document.getElementById('vypodeImport').addEventListener('click', () => {
+      document.getElementById('vypodeImportFile').click();
+    });
+    document.getElementById('vypodeImportFile').addEventListener('change', (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = () => {
+        const result = window.VypodeFilmState.importData(reader.result);
+        if (result.success) {
+          showFeedback(`Imported ${result.merged} film entries`, 'watchlist');
+        } else {
+          showFeedback('Import failed: ' + result.error, 'error');
+        }
+      };
+      reader.readAsText(file);
+    });
+
+    // Clear skipped
+    document.getElementById('vypodeClearSkipped').addEventListener('click', () => {
+      if (confirm('Clear all skipped films? They will appear in your deck again.')) {
+        window.VypodeFilmState.clearSkipped();
+        showFeedback('Skipped films cleared', 'watchlist');
+      }
+    });
+
+    // Clear all
+    document.getElementById('vypodeClearAll').addEventListener('click', () => {
+      if (confirm('Delete ALL Vypode data? This cannot be undone.')) {
+        window.VypodeFilmState.clearAll().then(() => {
+          showFeedback('All data cleared', 'watch');
+        });
+      }
+    });
+  }
+
+  function hideSettingsPanel() {
+    settingsPanelVisible = false;
+    const panel = document.querySelector('.vypode-settings-panel');
+    if (panel) { panel.classList.remove('visible'); setTimeout(() => panel.remove(), 300); }
+  }
+
+  async function checkCloudStatus() {
+    const statusEl = document.getElementById('vypodeCloudStatus');
+    const signInBtn = document.getElementById('vypodeCloudSignIn');
+    const pullBtn = document.getElementById('vypodeCloudPull');
+    const pushBtn = document.getElementById('vypodeCloudPush');
+    if (!statusEl) return;
+
+    try {
+      const result = await sendToBackground('getCloudStatus');
+      if (result.signedIn) {
+        statusEl.textContent = 'Signed in as ' + (result.email || 'Unknown');
+        statusEl.style.color = '#00c853';
+        if (signInBtn) { signInBtn.textContent = 'Sign out'; signInBtn.onclick = handleCloudSignOut; }
+        if (pullBtn) pullBtn.disabled = false;
+        if (pushBtn) pushBtn.disabled = false;
+      } else {
+        statusEl.textContent = 'Not signed in';
+        statusEl.style.color = 'rgba(255,255,255,0.5)';
+      }
+    } catch (e) {
+      statusEl.textContent = 'Cloud unavailable';
+      statusEl.style.color = 'rgba(255,255,255,0.3)';
     }
+  }
+
+  async function handleCloudSignOut() {
+    try {
+      await sendToBackground('cloudSignOut');
+      showFeedback('Signed out from cloud', 'watch');
+      checkCloudStatus();
+    } catch (e) {
+      showFeedback('Sign out failed', 'error');
+    }
+  }
+
+  function sendToBackground(action, data) {
+    return new Promise((resolve, reject) => {
+      chrome.runtime.sendMessage({ type: 'vypode', action, data }, (response) => {
+        if (chrome.runtime.lastError) {
+          reject(new Error(chrome.runtime.lastError.message));
+        } else {
+          resolve(response || {});
+        }
+      });
+    });
   }
 
   // ==================== UI CREATION ====================
@@ -538,15 +1076,28 @@
     createVypodeOverlay(film, states, false);
   }
 
-  function createVypodeDeckUI() {
-    filmDeck = getFilmsFromListing();
-    if (filmDeck.length === 0) {
+  async function createVypodeDeckUI() {
+    let allFilms = getFilmsFromListing();
+    if (allFilms.length === 0) {
       showFeedback('No films found on this page', 'error');
       return;
     }
+
+    // Apply fresh poster filtering
+    filmDeck = filterFilmDeck(allFilms);
+
+    if (filmDeck.length === 0) {
+      showFeedback(`All ${allFilms.length} films already in your collections — nothing new here!`, 'watchlist');
+      return;
+    }
+
     currentDeckIndex = 0;
     const film = filmDeck[0];
-    createVypodeOverlay(film, { isWatched: film.isWatched, isLiked: film.isLiked, inWatchlist: film.inWatchlist }, true);
+    createVypodeOverlay(
+      film,
+      { isWatched: film.isWatched, isLiked: film.isLiked, inWatchlist: film.inWatchlist },
+      true
+    );
   }
 
   function createVypodeOverlay(film, states, isDeck) {
@@ -556,75 +1107,99 @@
     const overlay = document.createElement('div');
     overlay.className = 'vypode-overlay';
 
+    const safeTitle = escapeHtml(film.title);
+    const safeYear = escapeHtml(film.year);
+    const safeRating = escapeHtml(film.rating);
+    const safeDirector = escapeHtml(film.director);
+    const safePoster = escapeHtml(film.poster);
+    const safeUrl = escapeHtml(film.url);
+    const safeGenres = film.genres.map(g => escapeHtml(g));
+
     const nextPageUrl = getNextPageUrl();
     const deckControls = isDeck ? `
       <div class="vypode-deck-nav">
-        <button class="vypode-nav-btn" id="vypodePrev" ${currentDeckIndex === 0 ? 'disabled' : ''}>‹ Prev</button>
+        <button class="vypode-nav-btn" id="vypodePrev" ${currentDeckIndex === 0 ? 'disabled' : ''}>&#8249; Prev</button>
         <span class="vypode-deck-counter">${currentDeckIndex + 1} / ${filmDeck.length}</span>
-        <button class="vypode-nav-btn" id="vypodeNext">Next ›</button>
+        <button class="vypode-nav-btn" id="vypodeNext">Next &#8250;</button>
       </div>
       <div class="vypode-progress-bar">
         <div class="vypode-progress-fill" style="width: ${((currentDeckIndex + 1) / filmDeck.length) * 100}%"></div>
       </div>
     ` : '';
 
+    // Filter badge: show how many films were hidden
+    const filterBadge = isDeck && filteredCount > 0
+      ? `<span class="vypode-filter-badge" title="${filteredCount} films hidden by filters">${filteredCount} filtered</span>`
+      : '';
+
     overlay.innerHTML = `
       <div class="vypode-container">
         <div class="vypode-header">
           <div class="vypode-logo">VYPODE</div>
-          <button class="vypode-review-btn" id="vypodeOpenReview" title="Write review (Shift)">✏️ Review</button>
-          <button class="vypode-close" id="vypodeClose">✕</button>
+          ${filterBadge}
+          <button class="vypode-review-btn" id="vypodeOpenReview" title="Write review (R)">Review</button>
+          <button class="vypode-settings-btn-header" id="vypodeOpenSettings" title="Settings">\u2699</button>
+          <button class="vypode-close" id="vypodeClose">\u2715</button>
         </div>
         ${deckControls}
         <div class="vypode-card-area">
           <div class="vypode-card" id="vypodeCard">
-            <img class="vypode-card-bg" src="${film.poster}" alt="${film.title}" onerror="this.src='https://letterboxd.com/static/img/empty-poster-230.c6baa486.png'">
+            <img class="vypode-card-bg" src="${safePoster}" alt="${safeTitle}">
             <div class="vypode-card-gradient"></div>
             <div class="vypode-glow-edge glow-right"></div>
             <div class="vypode-glow-edge glow-left"></div>
             <div class="vypode-glow-edge glow-up"></div>
             <div class="vypode-glow-edge glow-down"></div>
             <div class="vypode-swipe-overlay watch">WATCHED</div>
-            <div class="vypode-swipe-overlay like">❤️ LIKE</div>
+            <div class="vypode-swipe-overlay like">LIKE</div>
             <div class="vypode-swipe-overlay watchlist">WATCHLIST</div>
             <div class="vypode-swipe-overlay skip">SKIP</div>
-            <div class="vypode-zone-indicator zone-left">👁️ WATCHED ←</div>
-            <div class="vypode-zone-indicator zone-right">→ WATCHLIST 📋</div>
-            <div class="vypode-zone-indicator zone-up">↑ LIKE ❤️</div>
-            <div class="vypode-zone-indicator zone-down">↓ SKIP ⏭️</div>
+            <div class="vypode-zone-indicator zone-left">WATCHED \u2190</div>
+            <div class="vypode-zone-indicator zone-right">\u2192 WATCHLIST</div>
+            <div class="vypode-zone-indicator zone-up">\u2191 LIKE</div>
+            <div class="vypode-zone-indicator zone-down">\u2193 SKIP</div>
             <div class="vypode-card-info">
-              <div class="vypode-card-title">${film.title}</div>
+              <div class="vypode-card-title">${safeTitle}</div>
               <div class="vypode-card-meta">
-                ${film.year ? `<span>${film.year}</span>` : ''}
-                ${film.rating ? `<span>·</span><span class="vypode-rating">★ ${film.rating}</span>` : ''}
-                ${film.director ? `<span>·</span><span>${film.director}</span>` : ''}
+                ${safeYear ? `<span>${safeYear}</span>` : ''}
+                ${safeRating ? `<span>\u00b7</span><span class="vypode-rating">\u2605 ${safeRating}</span>` : ''}
+                ${safeDirector ? `<span>\u00b7</span><span>${safeDirector}</span>` : ''}
               </div>
               <div class="vypode-card-genres">
-                ${film.genres.map(g => `<span class="vypode-genre-tag">${g}</span>`).join('')}
+                ${safeGenres.map(g => `<span class="vypode-genre-tag">${g}</span>`).join('')}
               </div>
               <div class="vypode-card-states">
-                ${states.isWatched ? '<span class="vypode-state watched">✓ Watched</span>' : ''}
-                ${states.isLiked ? '<span class="vypode-state liked">❤️ Liked</span>' : ''}
-                ${states.inWatchlist ? '<span class="vypode-state watchlist">📋 In Watchlist</span>' : ''}
+                ${states.isWatched ? '<span class="vypode-state watched">\u2713 Watched</span>' : ''}
+                ${states.isLiked ? '<span class="vypode-state liked">Liked</span>' : ''}
+                ${states.inWatchlist ? '<span class="vypode-state watchlist">In Watchlist</span>' : ''}
               </div>
             </div>
           </div>
         </div>
         <div class="vypode-hints">
-          <div class="vypode-hint"><span class="hint-dot amber"></span>← Watched</div>
-          <div class="vypode-hint"><span class="hint-dot red"></span>↑ Like</div>
-          <div class="vypode-hint"><span class="hint-dot green"></span>Watchlist →</div>
-          ${isDeck ? '<div class="vypode-hint"><span class="hint-dot blue"></span>↓ Skip</div>' : ''}
+          <div class="vypode-hint"><span class="hint-dot amber"></span>\u2190 Watched</div>
+          <div class="vypode-hint"><span class="hint-dot red"></span>\u2191 Like</div>
+          <div class="vypode-hint"><span class="hint-dot green"></span>Watchlist \u2192</div>
+          ${isDeck ? '<div class="vypode-hint"><span class="hint-dot blue"></span>\u2193 Skip</div>' : ''}
         </div>
         <div class="vypode-hints-sub">
-          ${isDeck ? 'Swipe to act • <b>Shift</b> to review • 1-5 to rate' : '<b>Shift</b> to write review • 1-5 to rate'}
+          ${isDeck ? 'Swipe to act \u2022 <b>R</b> to review \u2022 <b>S</b> settings' : '<b>R</b> to write review \u2022 <b>S</b> settings'}
         </div>
-        ${isDeck ? `<a href="${film.url}" target="_blank" class="vypode-open-link">Open film page ↗</a>` : ''}
+        ${isDeck ? `<a href="${safeUrl}" target="_blank" class="vypode-open-link">Open film page \u2197</a>` : ''}
       </div>
       <div class="vypode-cursor-ring" id="vypodeCursor"><span class="vypode-cursor-label" id="vypodeCursorLabel"></span></div>
     `;
 
     document.body.appendChild(overlay);
+
+    // Poster fallback
+    const posterImg = overlay.querySelector('.vypode-card-bg');
+    if (posterImg) {
+      posterImg.addEventListener('error', function() {
+        this.src = 'https://letterboxd.com/static/img/empty-poster-230.c6baa486.png';
+      }, { once: true });
+    }
+
     setupEventListeners(isDeck);
     vypodeVisible = true;
     isListingPage = isDeck;
@@ -644,22 +1219,23 @@
     card.style.transform = 'scale(0.95)';
 
     setTimeout(() => {
-      card.querySelector('.vypode-card-bg').src = film.poster;
-      card.querySelector('.vypode-card-bg').alt = film.title;
+      const bgImg = card.querySelector('.vypode-card-bg');
+      bgImg.src = film.poster;
+      bgImg.alt = film.title;
       card.querySelector('.vypode-card-title').textContent = film.title;
 
       const metaEl = card.querySelector('.vypode-card-meta');
       metaEl.innerHTML = `
-        ${film.year ? `<span>${film.year}</span>` : ''}
-        ${film.rating ? `<span>·</span><span class="vypode-rating">★ ${film.rating}</span>` : ''}
-        ${film.director ? `<span>·</span><span>${film.director}</span>` : ''}
+        ${film.year ? `<span>${escapeHtml(film.year)}</span>` : ''}
+        ${film.rating ? `<span>\u00b7</span><span class="vypode-rating">\u2605 ${escapeHtml(film.rating)}</span>` : ''}
+        ${film.director ? `<span>\u00b7</span><span>${escapeHtml(film.director)}</span>` : ''}
       `;
 
       const statesEl = card.querySelector('.vypode-card-states');
       statesEl.innerHTML = `
-        ${film.isWatched ? '<span class="vypode-state watched">✓ Watched</span>' : ''}
-        ${film.isLiked ? '<span class="vypode-state liked">❤️ Liked</span>' : ''}
-        ${film.inWatchlist ? '<span class="vypode-state watchlist">📋 In Watchlist</span>' : ''}
+        ${film.isWatched ? '<span class="vypode-state watched">\u2713 Watched</span>' : ''}
+        ${film.isLiked ? '<span class="vypode-state liked">Liked</span>' : ''}
+        ${film.inWatchlist ? '<span class="vypode-state watchlist">In Watchlist</span>' : ''}
       `;
 
       if (prevBtn) prevBtn.disabled = currentDeckIndex === 0;
@@ -679,6 +1255,8 @@
     }
   }
 
+  // ── Event listeners ─────────────────────────────────────────────────
+
   function setupEventListeners(isDeck) {
     const card = document.getElementById('vypodeCard');
     const cursor = document.getElementById('vypodeCursor');
@@ -688,12 +1266,14 @@
     const prevBtn = document.getElementById('vypodePrev');
     const nextBtn = document.getElementById('vypodeNext');
     const reviewBtn = document.getElementById('vypodeOpenReview');
+    const settingsBtn = document.getElementById('vypodeOpenSettings');
 
     if (!card) return;
 
     closeBtn?.addEventListener('click', hideVypode);
     overlay?.addEventListener('click', (e) => { if (e.target === overlay) hideVypode(); });
     reviewBtn?.addEventListener('click', showReviewPanel);
+    settingsBtn?.addEventListener('click', showSettingsPanel);
 
     if (isDeck) {
       prevBtn?.addEventListener('click', goToPrevCard);
@@ -746,24 +1326,26 @@
   function handleKeyDown(e) {
     if (!vypodeVisible) return;
 
-    // If review panel is open, handle its shortcuts
+    // Review panel shortcuts
     if (reviewPanelVisible) {
-      // Number keys 1-5 for star rating (simple: 1=1 star, 2=2 stars, etc.)
-      if (e.key >= '1' && e.key <= '5') {
+      if (e.key >= '1' && e.key <= '5' && !isUserTyping()) {
         e.preventDefault();
         setRating(parseInt(e.key));
-      } else if (e.key === 'Shift') {
+      } else if (e.key === 'Enter' && !e.shiftKey && !isUserTyping()) {
         e.preventDefault();
-        hideReviewPanel();
-      } else if (e.key === 'Enter' && !e.shiftKey) {
-        const textarea = document.getElementById('vypodeReviewText');
-        if (document.activeElement !== textarea) {
-          e.preventDefault();
-          document.getElementById('vypodeReviewSubmit')?.click();
-        }
+        document.getElementById('vypodeReviewSubmit')?.click();
       } else if (e.key === 'Escape') {
         e.preventDefault();
         hideReviewPanel();
+      }
+      return;
+    }
+
+    // Settings panel — Escape to close
+    if (settingsPanelVisible) {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        hideSettingsPanel();
       }
       return;
     }
@@ -772,14 +1354,18 @@
     const card = document.getElementById('vypodeCard');
     if (!card) return;
 
-    // Shift to open review panel
-    if (e.key === 'Shift') {
+    if (e.key === 'r' || e.key === 'R') {
       e.preventDefault();
       showReviewPanel();
       return;
     }
 
-    // Number keys 1-5 for quick rating (opens review panel and sets rating)
+    if (e.key === 's' || e.key === 'S') {
+      e.preventDefault();
+      showSettingsPanel();
+      return;
+    }
+
     if (e.key >= '1' && e.key <= '5') {
       e.preventDefault();
       showReviewPanel();
@@ -810,29 +1396,31 @@
     else if (e.key === 'Escape') hideVypode();
   }
 
+  // ── Card visuals ────────────────────────────────────────────────────
+
   function updateCursorAndCard(card, cursor, cursorLabel, zone, isDeck) {
     cursor.className = 'vypode-cursor-ring visible';
     resetCardVisuals(card);
     if (zone === 'right') {
-      cursor.classList.add('zone-right'); cursorLabel.textContent = '📋';
+      cursor.classList.add('zone-right'); cursorLabel.textContent = '\ud83d\udccb';
       card.querySelector('.glow-right').style.opacity = 1;
       card.querySelector('.vypode-swipe-overlay.watchlist').style.opacity = 0.9;
       card.querySelector('.zone-right').classList.add('active');
       card.style.transform = 'perspective(800px) rotateY(3deg) translateX(8px)';
     } else if (zone === 'left') {
-      cursor.classList.add('zone-left'); cursorLabel.textContent = '👁️';
+      cursor.classList.add('zone-left'); cursorLabel.textContent = '\ud83d\udc41\ufe0f';
       card.querySelector('.glow-left').style.opacity = 1;
       card.querySelector('.vypode-swipe-overlay.watch').style.opacity = 0.9;
       card.querySelector('.zone-left').classList.add('active');
       card.style.transform = 'perspective(800px) rotateY(-3deg) translateX(-8px)';
     } else if (zone === 'up') {
-      cursor.classList.add('zone-up'); cursorLabel.textContent = '❤️';
+      cursor.classList.add('zone-up'); cursorLabel.textContent = '\u2764\ufe0f';
       card.querySelector('.glow-up').style.opacity = 1;
       card.querySelector('.vypode-swipe-overlay.like').style.opacity = 0.9;
       card.querySelector('.zone-up').classList.add('active');
       card.style.transform = 'perspective(800px) rotateX(3deg) translateY(-6px)';
     } else if (zone === 'down' && isDeck) {
-      cursor.classList.add('zone-down'); cursorLabel.textContent = '⏭️';
+      cursor.classList.add('zone-down'); cursorLabel.textContent = '\u23ed\ufe0f';
       const glowDown = card.querySelector('.glow-down');
       const skipOverlay = card.querySelector('.vypode-swipe-overlay.skip');
       const zoneDown = card.querySelector('.zone-down');
@@ -870,18 +1458,21 @@
   function refreshStates() {
     const states = getStates();
     const statesContainer = document.querySelector('.vypode-card-states');
-    if (statesContainer) statesContainer.innerHTML = (states.isWatched ? '<span class="vypode-state watched">✓ Watched</span>' : '') + (states.isLiked ? '<span class="vypode-state liked">❤️ Liked</span>' : '') + (states.inWatchlist ? '<span class="vypode-state watchlist">📋 In Watchlist</span>' : '');
+    if (statesContainer) statesContainer.innerHTML = (states.isWatched ? '<span class="vypode-state watched">\u2713 Watched</span>' : '') + (states.isLiked ? '<span class="vypode-state liked">Liked</span>' : '') + (states.inWatchlist ? '<span class="vypode-state watchlist">In Watchlist</span>' : '');
   }
 
   function hideVypode() {
     hideReviewPanel();
+    hideSettingsPanel();
     const overlay = document.querySelector('.vypode-overlay');
     if (overlay) { overlay.classList.add('hiding'); setTimeout(() => overlay.remove(), 300); }
     vypodeVisible = false;
     isListingPage = false;
-    if (actionIframe) { actionIframe.remove(); actionIframe = null; }
+    cleanupIframe();
     document.removeEventListener('keydown', handleKeyDown);
   }
+
+  // ── Toggle button + init ────────────────────────────────────────────
 
   function createToggleButton() {
     const existing = document.querySelector('.vypode-toggle-btn');
@@ -892,7 +1483,7 @@
 
     const btn = document.createElement('button');
     btn.className = 'vypode-toggle-btn';
-    btn.innerHTML = pageType === 'listing' ? '🎴 Vypode Deck' : '🎴 Vypode';
+    btn.textContent = pageType === 'listing' ? 'Vypode Deck' : 'Vypode';
     btn.title = pageType === 'listing' ? 'Browse films with Vypode swipe deck' : 'Open Vypode swipe interface';
     btn.addEventListener('click', () => {
       if (vypodeVisible) {
@@ -908,24 +1499,23 @@
     document.body.appendChild(btn);
   }
 
-  function init() {
+  async function init() {
+    // Initialize FilmState registry
+    if (window.VypodeFilmState) {
+      await window.VypodeFilmState.init();
+    }
+
+    // Detect account
+    await initAccount();
+
+    // Auto-open deck from next-page navigation
     if (window.location.hash === '#vypode-auto') {
       window.location.hash = '';
-      if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', () => {
-          setTimeout(() => { createToggleButton(); createVypodeDeckUI(); }, 1500);
-        });
-      } else {
-        setTimeout(() => { createToggleButton(); createVypodeDeckUI(); }, 1500);
-      }
+      setTimeout(() => { createToggleButton(); createVypodeDeckUI(); }, 1500);
       return;
     }
 
-    if (document.readyState === 'loading') {
-      document.addEventListener('DOMContentLoaded', () => setTimeout(createToggleButton, 1000));
-    } else {
-      setTimeout(createToggleButton, 1000);
-    }
+    setTimeout(createToggleButton, 1000);
   }
 
   init();

@@ -1,6 +1,7 @@
-/* VYPODE FOR LETTERBOXD - Styles */
+/* VYPODE FOR LETTERBOXD - Styles v5.0.0 */
 
-/* Toggle Button */
+/* ── Toggle Button ─────────────────────────────────────────────────── */
+
 .vypode-toggle-btn {
   position: fixed;
   bottom: 20px;
@@ -24,7 +25,8 @@
   box-shadow: 0 6px 25px rgba(255, 107, 53, 0.5);
 }
 
-/* Overlay */
+/* ── Overlay ───────────────────────────────────────────────────────── */
+
 .vypode-overlay {
   position: fixed;
   top: 0;
@@ -53,7 +55,8 @@
   to { opacity: 0; }
 }
 
-/* Container */
+/* ── Container ─────────────────────────────────────────────────────── */
+
 .vypode-container {
   display: flex;
   flex-direction: column;
@@ -62,14 +65,15 @@
   padding: 20px;
 }
 
-/* Header */
+/* ── Header ────────────────────────────────────────────────────────── */
+
 .vypode-header {
   display: flex;
   align-items: center;
-  gap: 20px;
+  gap: 12px;
   width: 100%;
   max-width: 400px;
-  justify-content: space-between;
+  justify-content: flex-start;
 }
 
 .vypode-logo {
@@ -100,7 +104,43 @@
   transform: rotate(90deg);
 }
 
-/* Card Area */
+/* ── Filter Badge ──────────────────────────────────────────────────── */
+
+.vypode-filter-badge {
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  color: rgba(255, 255, 255, 0.6);
+  padding: 4px 10px;
+  border-radius: 12px;
+  font-size: 11px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+/* ── Settings Button (Header) ──────────────────────────────────────── */
+
+.vypode-settings-btn-header {
+  background: rgba(255, 255, 255, 0.1);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  color: white;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  font-size: 18px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.vypode-settings-btn-header:hover {
+  background: rgba(255, 255, 255, 0.2);
+  border-color: #f7931e;
+}
+
+/* ── Card Area ─────────────────────────────────────────────────────── */
+
 .vypode-card-area {
   position: relative;
   width: 320px;
@@ -108,7 +148,8 @@
   perspective: 1000px;
 }
 
-/* Card */
+/* ── Card ──────────────────────────────────────────────────────────── */
+
 .vypode-card {
   position: relative;
   width: 100%;
@@ -116,7 +157,7 @@
   border-radius: 20px;
   overflow: hidden;
   cursor: pointer;
-  transition: transform 0.15s ease;
+  transition: transform 0.15s ease, opacity 0.15s ease;
   box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
 }
 
@@ -136,7 +177,8 @@
   background: linear-gradient(to top, rgba(0,0,0,0.95), rgba(0,0,0,0.6) 50%, transparent);
 }
 
-/* Glow Edges */
+/* ── Glow Edges ────────────────────────────────────────────────────── */
+
 .vypode-glow-edge {
   position: absolute;
   opacity: 0;
@@ -145,30 +187,27 @@
 }
 
 .glow-right {
-  right: 0;
-  top: 0;
-  bottom: 0;
-  width: 100px;
+  right: 0; top: 0; bottom: 0; width: 100px;
   background: linear-gradient(to left, rgba(0, 200, 83, 0.6), transparent);
 }
 
 .glow-left {
-  left: 0;
-  top: 0;
-  bottom: 0;
-  width: 100px;
+  left: 0; top: 0; bottom: 0; width: 100px;
   background: linear-gradient(to right, rgba(255, 170, 0, 0.6), transparent);
 }
 
 .glow-up {
-  top: 0;
-  left: 0;
-  right: 0;
-  height: 100px;
+  top: 0; left: 0; right: 0; height: 100px;
   background: linear-gradient(to bottom, rgba(255, 75, 75, 0.6), transparent);
 }
 
-/* Swipe Overlays */
+.glow-down {
+  bottom: 0; left: 0; right: 0; height: 100px;
+  background: linear-gradient(to top, rgba(100, 150, 255, 0.6), transparent);
+}
+
+/* ── Swipe Overlays ────────────────────────────────────────────────── */
+
 .vypode-swipe-overlay {
   position: absolute;
   top: 50%;
@@ -186,8 +225,10 @@
 .vypode-swipe-overlay.watch { color: #ffaa00; }
 .vypode-swipe-overlay.like { color: #ff4b4b; font-size: 48px; }
 .vypode-swipe-overlay.watchlist { color: #00c853; }
+.vypode-swipe-overlay.skip { color: #6496ff; }
 
-/* Zone Indicators */
+/* ── Zone Indicators ───────────────────────────────────────────────── */
+
 .vypode-zone-indicator {
   position: absolute;
   font-size: 12px;
@@ -198,30 +239,18 @@
   pointer-events: none;
 }
 
-.zone-left {
-  left: 10px;
-  top: 50%;
-  transform: translateY(-50%);
-}
-
-.zone-right {
-  right: 10px;
-  top: 50%;
-  transform: translateY(-50%);
-}
-
-.zone-up {
-  top: 15px;
-  left: 50%;
-  transform: translateX(-50%);
-}
+.zone-left { left: 10px; top: 50%; transform: translateY(-50%); }
+.zone-right { right: 10px; top: 50%; transform: translateY(-50%); }
+.zone-up { top: 15px; left: 50%; transform: translateX(-50%); }
+.zone-down { bottom: 15px; left: 50%; transform: translateX(-50%); }
 
 .vypode-zone-indicator.active {
   opacity: 1;
   color: white;
 }
 
-/* Card Info */
+/* ── Card Info ─────────────────────────────────────────────────────── */
+
 .vypode-card-info {
   position: absolute;
   bottom: 0;
@@ -248,10 +277,7 @@
   margin-bottom: 10px;
 }
 
-.vypode-rating {
-  color: #ffcc00;
-  font-weight: 600;
-}
+.vypode-rating { color: #ffcc00; font-weight: 600; }
 
 .vypode-card-genres {
   display: flex;
@@ -281,22 +307,12 @@
   font-weight: 600;
 }
 
-.vypode-state.watched {
-  background: rgba(255, 170, 0, 0.3);
-  color: #ffaa00;
-}
+.vypode-state.watched { background: rgba(255, 170, 0, 0.3); color: #ffaa00; }
+.vypode-state.liked { background: rgba(255, 75, 75, 0.3); color: #ff4b4b; }
+.vypode-state.watchlist { background: rgba(0, 200, 83, 0.3); color: #00c853; }
 
-.vypode-state.liked {
-  background: rgba(255, 75, 75, 0.3);
-  color: #ff4b4b;
-}
+/* ── Cursor Ring ───────────────────────────────────────────────────── */
 
-.vypode-state.watchlist {
-  background: rgba(0, 200, 83, 0.3);
-  color: #00c853;
-}
-
-/* Cursor Ring */
 .vypode-cursor-ring {
   position: fixed;
   width: 50px;
@@ -313,33 +329,16 @@
   justify-content: center;
 }
 
-.vypode-cursor-ring.visible {
-  opacity: 1;
-}
+.vypode-cursor-ring.visible { opacity: 1; }
+.vypode-cursor-ring.zone-left { border-color: #ffaa00; background: rgba(255, 170, 0, 0.2); box-shadow: 0 0 20px rgba(255, 170, 0, 0.5); }
+.vypode-cursor-ring.zone-right { border-color: #00c853; background: rgba(0, 200, 83, 0.2); box-shadow: 0 0 20px rgba(0, 200, 83, 0.5); }
+.vypode-cursor-ring.zone-up { border-color: #ff4b4b; background: rgba(255, 75, 75, 0.2); box-shadow: 0 0 20px rgba(255, 75, 75, 0.5); }
+.vypode-cursor-ring.zone-down { border-color: #6496ff; background: rgba(100, 150, 255, 0.2); box-shadow: 0 0 20px rgba(100, 150, 255, 0.5); }
 
-.vypode-cursor-ring.zone-left {
-  border-color: #ffaa00;
-  background: rgba(255, 170, 0, 0.2);
-  box-shadow: 0 0 20px rgba(255, 170, 0, 0.5);
-}
+.vypode-cursor-label { font-size: 20px; }
 
-.vypode-cursor-ring.zone-right {
-  border-color: #00c853;
-  background: rgba(0, 200, 83, 0.2);
-  box-shadow: 0 0 20px rgba(0, 200, 83, 0.5);
-}
+/* ── Hints ─────────────────────────────────────────────────────────── */
 
-.vypode-cursor-ring.zone-up {
-  border-color: #ff4b4b;
-  background: rgba(255, 75, 75, 0.2);
-  box-shadow: 0 0 20px rgba(255, 75, 75, 0.5);
-}
-
-.vypode-cursor-label {
-  font-size: 20px;
-}
-
-/* Hints */
 .vypode-hints {
   display: flex;
   gap: 30px;
@@ -354,15 +353,11 @@
   font-size: 13px;
 }
 
-.hint-dot {
-  width: 10px;
-  height: 10px;
-  border-radius: 50%;
-}
-
+.hint-dot { width: 10px; height: 10px; border-radius: 50%; }
 .hint-dot.amber { background: #ffaa00; }
 .hint-dot.red { background: #ff4b4b; }
 .hint-dot.green { background: #00c853; }
+.hint-dot.blue { background: #6496ff; }
 
 .vypode-hints-sub {
   color: rgba(255, 255, 255, 0.4);
@@ -370,7 +365,8 @@
   margin-top: 5px;
 }
 
-/* Toast */
+/* ── Toast ─────────────────────────────────────────────────────────── */
+
 .vypode-toast {
   position: fixed;
   bottom: 80px;
@@ -388,17 +384,15 @@
   border: 2px solid rgba(255, 255, 255, 0.2);
 }
 
-.vypode-toast.show {
-  opacity: 1;
-  transform: translateX(-50%) translateY(0);
-}
-
+.vypode-toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
 .vypode-toast-watch { border-color: #ffaa00; }
 .vypode-toast-like { border-color: #ff4b4b; }
 .vypode-toast-watchlist { border-color: #00c853; }
+.vypode-toast-skip { border-color: #6496ff; }
 .vypode-toast-error { border-color: #ff4444; color: #ff4444; }
 
-/* Deck Navigation */
+/* ── Deck Navigation ───────────────────────────────────────────────── */
+
 .vypode-deck-nav {
   display: flex;
   align-items: center;
@@ -417,14 +411,8 @@
   transition: all 0.2s ease;
 }
 
-.vypode-nav-btn:hover:not(:disabled) {
-  background: rgba(255, 255, 255, 0.2);
-}
-
-.vypode-nav-btn:disabled {
-  opacity: 0.3;
-  cursor: not-allowed;
-}
+.vypode-nav-btn:hover:not(:disabled) { background: rgba(255, 255, 255, 0.2); }
+.vypode-nav-btn:disabled { opacity: 0.3; cursor: not-allowed; }
 
 .vypode-deck-counter {
   color: rgba(255, 255, 255, 0.7);
@@ -434,7 +422,8 @@
   text-align: center;
 }
 
-/* Open Film Link */
+/* ── Open Film Link ────────────────────────────────────────────────── */
+
 .vypode-open-link {
   display: inline-block;
   margin-top: 10px;
@@ -444,11 +433,10 @@
   transition: color 0.2s ease;
 }
 
-.vypode-open-link:hover {
-  color: #f7931e;
-}
+.vypode-open-link:hover { color: #f7931e; }
 
-/* Progress Bar */
+/* ── Progress Bar ──────────────────────────────────────────────────── */
+
 .vypode-progress-bar {
   width: 100%;
   max-width: 320px;
@@ -466,42 +454,16 @@
   transition: width 0.3s ease;
 }
 
-/* Skip/Down Zone */
-.glow-down {
-  bottom: 0;
-  left: 0;
-  right: 0;
-  height: 100px;
-  background: linear-gradient(to top, rgba(100, 150, 255, 0.6), transparent);
-}
+/* ── Next Page Info ────────────────────────────────────────────────── */
 
-.vypode-swipe-overlay.skip {
-  color: #6496ff;
-}
-
-.vypode-cursor-ring.zone-down {
-  border-color: #6496ff;
-  background: rgba(100, 150, 255, 0.2);
-  box-shadow: 0 0 20px rgba(100, 150, 255, 0.5);
-}
-
-.hint-dot.blue {
-  background: #6496ff;
-}
-
-/* Next Page Info */
 .vypode-next-page-info {
   color: rgba(255, 255, 255, 0.4);
   font-size: 11px;
   margin-top: 5px;
 }
 
-/* Card transition for deck mode */
-.vypode-card {
-  transition: transform 0.15s ease, opacity 0.15s ease;
-}
+/* ── Review Button in Header ───────────────────────────────────────── */
 
-/* Review Button in Header */
 .vypode-review-btn {
   background: rgba(255, 255, 255, 0.1);
   border: 1px solid rgba(255, 255, 255, 0.2);
@@ -512,7 +474,6 @@
   cursor: pointer;
   transition: all 0.2s ease;
   margin-left: auto;
-  margin-right: 10px;
 }
 
 .vypode-review-btn:hover {
@@ -520,13 +481,12 @@
   border-color: #f7931e;
 }
 
-/* Review Panel */
+/* ── Review Panel ──────────────────────────────────────────────────── */
+
 .vypode-review-panel {
   position: fixed;
-  top: 0;
-  left: 0;
-  width: 100%;
-  height: 100%;
+  top: 0; left: 0;
+  width: 100%; height: 100%;
   background: rgba(0, 0, 0, 0.9);
   z-index: 1000010;
   display: flex;
@@ -536,9 +496,7 @@
   transition: opacity 0.3s ease;
 }
 
-.vypode-review-panel.visible {
-  opacity: 1;
-}
+.vypode-review-panel.visible { opacity: 1; }
 
 .vypode-review-content {
   background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
@@ -576,27 +534,13 @@
   transition: all 0.2s ease;
 }
 
-.vypode-review-close:hover {
-  background: rgba(255, 255, 255, 0.2);
-}
+.vypode-review-close:hover { background: rgba(255, 255, 255, 0.2); }
 
-/* Rating Section */
-.vypode-rating-section {
-  margin-bottom: 25px;
-}
+/* ── Rating Section ────────────────────────────────────────────────── */
 
-.vypode-rating-section label {
-  display: block;
-  color: rgba(255, 255, 255, 0.7);
-  font-size: 13px;
-  margin-bottom: 10px;
-}
-
-.vypode-stars {
-  display: flex;
-  gap: 4px;
-  margin-bottom: 8px;
-}
+.vypode-rating-section { margin-bottom: 25px; }
+.vypode-rating-section label { display: block; color: rgba(255, 255, 255, 0.7); font-size: 13px; margin-bottom: 10px; }
+.vypode-stars { display: flex; gap: 4px; margin-bottom: 8px; }
 
 .vypode-star {
   background: rgba(255, 255, 255, 0.1);
@@ -610,40 +554,15 @@
   transition: all 0.15s ease;
 }
 
-.vypode-star:hover {
-  background: rgba(255, 200, 0, 0.2);
-  color: #ffc800;
-}
+.vypode-star:hover { background: rgba(255, 200, 0, 0.2); color: #ffc800; }
+.vypode-star.active { background: rgba(255, 200, 0, 0.3); color: #ffc800; }
+.vypode-rating-text { color: #ffc800; font-size: 16px; font-weight: 600; }
 
-.vypode-star.active {
-  background: rgba(255, 200, 0, 0.3);
-  color: #ffc800;
-}
+/* ── Review Section ────────────────────────────────────────────────── */
 
-.vypode-rating-text {
-  color: #ffc800;
-  font-size: 16px;
-  font-weight: 600;
-}
-
-/* Review Section */
-.vypode-review-section {
-  margin-bottom: 25px;
-}
-
-.vypode-review-section label {
-  display: block;
-  color: rgba(255, 255, 255, 0.7);
-  font-size: 13px;
-  margin-bottom: 10px;
-}
-
-.vypode-dictate-row {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  margin-bottom: 10px;
-}
+.vypode-review-section { margin-bottom: 25px; }
+.vypode-review-section label { display: block; color: rgba(255, 255, 255, 0.7); font-size: 13px; margin-bottom: 10px; }
+.vypode-dictate-row { display: flex; align-items: center; gap: 12px; margin-bottom: 10px; }
 
 .vypode-mic-btn {
   background: linear-gradient(135deg, #ff6b35, #f7931e);
@@ -657,9 +576,7 @@
   transition: all 0.2s ease;
 }
 
-.vypode-mic-btn:hover {
-  transform: scale(1.05);
-}
+.vypode-mic-btn:hover { transform: scale(1.05); }
 
 .vypode-mic-btn.listening {
   background: linear-gradient(135deg, #ff4444, #ff6666);
@@ -671,18 +588,8 @@
   50% { box-shadow: 0 0 0 10px rgba(255, 68, 68, 0); }
 }
 
-.vypode-mic-hint {
-  color: rgba(255, 255, 255, 0.4);
-  font-size: 12px;
-}
-
-.vypode-interim {
-  color: rgba(255, 255, 255, 0.5);
-  font-size: 14px;
-  font-style: italic;
-  min-height: 20px;
-  margin-bottom: 8px;
-}
+.vypode-mic-hint { color: rgba(255, 255, 255, 0.4); font-size: 12px; }
+.vypode-interim { color: rgba(255, 255, 255, 0.5); font-size: 14px; font-style: italic; min-height: 20px; margin-bottom: 8px; }
 
 #vypodeReviewText {
   width: 100%;
@@ -698,22 +605,12 @@
   transition: border-color 0.2s ease;
 }
 
-#vypodeReviewText:focus {
-  outline: none;
-  border-color: #f7931e;
-}
+#vypodeReviewText:focus { outline: none; border-color: #f7931e; }
+#vypodeReviewText::placeholder { color: rgba(255, 255, 255, 0.3); }
 
-#vypodeReviewText::placeholder {
-  color: rgba(255, 255, 255, 0.3);
-}
+/* ── Review Actions ────────────────────────────────────────────────── */
 
-/* Review Actions */
-.vypode-review-actions {
-  display: flex;
-  gap: 12px;
-  justify-content: flex-end;
-  margin-bottom: 15px;
-}
+.vypode-review-actions { display: flex; gap: 12px; justify-content: flex-end; margin-bottom: 15px; }
 
 .vypode-btn {
   padding: 12px 24px;
@@ -725,31 +622,316 @@
   border: none;
 }
 
-.vypode-btn-cancel {
-  background: rgba(255, 255, 255, 0.1);
+.vypode-btn-cancel { background: rgba(255, 255, 255, 0.1); color: white; }
+.vypode-btn-cancel:hover { background: rgba(255, 255, 255, 0.2); }
+.vypode-btn-submit { background: linear-gradient(135deg, #00c853, #00e676); color: white; }
+.vypode-btn-submit:hover { transform: scale(1.05); }
+
+.vypode-review-shortcuts { text-align: center; color: rgba(255, 255, 255, 0.4); font-size: 11px; }
+.vypode-review-shortcuts b { color: rgba(255, 255, 255, 0.6); }
+
+/* ================================================================== */
+/* ── SETTINGS PANEL (v5.0) ─────────────────────────────────────────── */
+/* ================================================================== */
+
+.vypode-settings-panel {
+  position: fixed;
+  top: 0; left: 0;
+  width: 100%; height: 100%;
+  background: rgba(0, 0, 0, 0.92);
+  z-index: 1000010;
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  padding-top: 40px;
+  opacity: 0;
+  transition: opacity 0.3s ease;
+  overflow-y: auto;
+}
+
+.vypode-settings-panel.visible { opacity: 1; }
+
+.vypode-settings-content {
+  background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+  border-radius: 20px;
+  padding: 30px;
+  width: 90%;
+  max-width: 440px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  margin-bottom: 40px;
+}
+
+.vypode-settings-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 25px;
+}
+
+.vypode-settings-header h3 {
   color: white;
+  font-size: 20px;
+  font-weight: 600;
+  margin: 0;
 }
 
-.vypode-btn-cancel:hover {
-  background: rgba(255, 255, 255, 0.2);
+/* ── Settings Sections ─────────────────────────────────────────────── */
+
+.vypode-settings-section {
+  margin-bottom: 24px;
+  padding-bottom: 20px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
 }
 
-.vypode-btn-submit {
-  background: linear-gradient(135deg, #00c853, #00e676);
+.vypode-settings-section:last-of-type {
+  border-bottom: none;
+  margin-bottom: 10px;
+}
+
+.vypode-settings-section-title {
+  color: #f7931e;
+  font-size: 13px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  margin-bottom: 12px;
+}
+
+.vypode-settings-hint {
+  color: rgba(255, 255, 255, 0.35);
+  font-size: 12px;
+  line-height: 1.5;
+  margin-top: 8px;
+}
+
+/* ── Account Row ───────────────────────────────────────────────────── */
+
+.vypode-account-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  background: rgba(255, 255, 255, 0.04);
+  border-radius: 12px;
+}
+
+.vypode-account-avatar {
+  font-size: 20px;
+}
+
+.vypode-account-name {
   color: white;
+  font-size: 15px;
+  font-weight: 600;
+  flex: 1;
 }
 
-.vypode-btn-submit:hover {
-  transform: scale(1.05);
-}
-
-/* Shortcuts hint */
-.vypode-review-shortcuts {
-  text-align: center;
-  color: rgba(255, 255, 255, 0.4);
+.vypode-account-badge {
+  background: rgba(0, 200, 83, 0.2);
+  color: #00c853;
+  padding: 3px 10px;
+  border-radius: 10px;
   font-size: 11px;
+  font-weight: 600;
 }
 
-.vypode-review-shortcuts b {
-  color: rgba(255, 255, 255, 0.6);
+.vypode-account-warn {
+  color: rgba(255, 255, 255, 0.5);
+  font-size: 13px;
+}
+
+/* ── Sync Row ──────────────────────────────────────────────────────── */
+
+.vypode-sync-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.vypode-sync-status {
+  color: rgba(255, 255, 255, 0.5);
+  font-size: 13px;
+}
+
+.vypode-sync-btn {
+  background: linear-gradient(135deg, #ff6b35, #f7931e);
+  border: none;
+  color: white;
+  padding: 8px 16px;
+  border-radius: 16px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  white-space: nowrap;
+}
+
+.vypode-sync-btn:hover:not(:disabled) { transform: scale(1.05); }
+.vypode-sync-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.vypode-sync-counts {
+  color: rgba(255, 255, 255, 0.4);
+  font-size: 12px;
+  margin-top: 8px;
+}
+
+/* ── Toggle Rows (Filter toggles) ──────────────────────────────────── */
+
+.vypode-toggle-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 0;
+  cursor: pointer;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+}
+
+.vypode-toggle-row:last-child { border-bottom: none; }
+
+.vypode-toggle-row span:first-child {
+  color: rgba(255, 255, 255, 0.8);
+  font-size: 14px;
+}
+
+/* Custom toggle switch */
+.vypode-toggle {
+  position: absolute;
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+.vypode-toggle-slider {
+  position: relative;
+  display: inline-block;
+  width: 42px;
+  height: 24px;
+  background: rgba(255, 255, 255, 0.15);
+  border-radius: 12px;
+  transition: background 0.3s ease;
+  flex-shrink: 0;
+}
+
+.vypode-toggle-slider::after {
+  content: '';
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 18px;
+  height: 18px;
+  background: white;
+  border-radius: 50%;
+  transition: transform 0.3s ease;
+}
+
+.vypode-toggle:checked + .vypode-toggle-slider {
+  background: #f7931e;
+}
+
+.vypode-toggle:checked + .vypode-toggle-slider::after {
+  transform: translateX(18px);
+}
+
+/* ── Stats Grid ────────────────────────────────────────────────────── */
+
+.vypode-stats-grid {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 8px;
+}
+
+.vypode-stat {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 10px 4px;
+  background: rgba(255, 255, 255, 0.04);
+  border-radius: 10px;
+}
+
+.vypode-stat-num {
+  color: white;
+  font-size: 18px;
+  font-weight: 700;
+}
+
+.vypode-stat-label {
+  color: rgba(255, 255, 255, 0.4);
+  font-size: 10px;
+  text-transform: uppercase;
+}
+
+.vypode-stat-watched { color: #ffaa00; }
+.vypode-stat-liked { color: #ff4b4b; }
+.vypode-stat-watchlist { color: #00c853; }
+.vypode-stat-skipped { color: #6496ff; }
+
+/* ── Cloud Status ──────────────────────────────────────────────────── */
+
+.vypode-cloud-status {
+  color: rgba(255, 255, 255, 0.5);
+  font-size: 13px;
+  margin-bottom: 12px;
+}
+
+.vypode-cloud-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+/* ── Settings Buttons ──────────────────────────────────────────────── */
+
+.vypode-settings-btn {
+  background: linear-gradient(135deg, #ff6b35, #f7931e);
+  border: none;
+  color: white;
+  padding: 8px 16px;
+  border-radius: 16px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.vypode-settings-btn:hover:not(:disabled) { transform: scale(1.03); }
+.vypode-settings-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+.vypode-btn-secondary {
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+}
+
+.vypode-btn-secondary:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.15);
+}
+
+.vypode-btn-danger {
+  background: rgba(255, 68, 68, 0.15);
+  border: 1px solid rgba(255, 68, 68, 0.3);
+  color: #ff6666;
+}
+
+.vypode-btn-danger:hover {
+  background: rgba(255, 68, 68, 0.25);
+}
+
+/* ── Data Actions ──────────────────────────────────────────────────── */
+
+.vypode-data-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+/* ── Settings Footer ───────────────────────────────────────────────── */
+
+.vypode-settings-footer {
+  text-align: center;
+  color: rgba(255, 255, 255, 0.2);
+  font-size: 11px;
+  margin-top: 10px;
 }

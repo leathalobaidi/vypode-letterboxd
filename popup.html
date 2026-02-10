@@ -5,7 +5,7 @@
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body {
-      width: 280px;
+      width: 300px;
       padding: 20px;
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
       background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
@@ -20,14 +20,67 @@
       -webkit-text-fill-color: transparent;
       letter-spacing: 3px;
       text-align: center;
-      margin-bottom: 5px;
+      margin-bottom: 3px;
     }
     .subtitle {
       text-align: center;
       color: rgba(255,255,255,0.5);
       font-size: 11px;
-      margin-bottom: 20px;
+      margin-bottom: 16px;
     }
+    .version {
+      text-align: center;
+      color: rgba(255,255,255,0.25);
+      font-size: 10px;
+      margin-bottom: 16px;
+    }
+
+    /* Account status */
+    .account-box {
+      background: rgba(255,255,255,0.05);
+      border-radius: 12px;
+      padding: 12px;
+      margin-bottom: 15px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .account-box .avatar { font-size: 20px; }
+    .account-box .info { flex: 1; }
+    .account-box .name { color: white; font-size: 13px; font-weight: 600; }
+    .account-box .status { font-size: 11px; }
+    .account-box .status.linked { color: #00c853; }
+    .account-box .status.unlinked { color: rgba(255,255,255,0.4); }
+    .account-box .badge {
+      background: rgba(0,200,83,0.2);
+      color: #00c853;
+      padding: 2px 8px;
+      border-radius: 8px;
+      font-size: 10px;
+      font-weight: 600;
+    }
+
+    /* Stats row */
+    .stats {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 6px;
+      margin-bottom: 15px;
+    }
+    .stat {
+      text-align: center;
+      padding: 8px 2px;
+      background: rgba(255,255,255,0.04);
+      border-radius: 8px;
+    }
+    .stat-num { display: block; font-size: 16px; font-weight: 700; }
+    .stat-label { display: block; font-size: 9px; color: rgba(255,255,255,0.4); text-transform: uppercase; }
+    .stat-watched .stat-num { color: #ffaa00; }
+    .stat-liked .stat-num { color: #ff4b4b; }
+    .stat-watchlist .stat-num { color: #00c853; }
+    .stat-skipped .stat-num { color: #6496ff; }
+
+    /* Instructions */
     .instructions {
       background: rgba(255,255,255,0.05);
       border-radius: 12px;
@@ -43,34 +96,32 @@
       display: flex;
       align-items: center;
       gap: 10px;
-      padding: 8px 0;
-      border-bottom: 1px solid rgba(255,255,255,0.1);
+      padding: 6px 0;
+      border-bottom: 1px solid rgba(255,255,255,0.06);
     }
     .action-row:last-child { border-bottom: none; }
     .action-icon {
-      width: 28px;
-      height: 28px;
+      width: 26px;
+      height: 26px;
       border-radius: 50%;
       display: flex;
       align-items: center;
       justify-content: center;
-      font-size: 12px;
+      font-size: 11px;
     }
     .action-icon.watch { background: rgba(255,170,0,0.2); }
     .action-icon.like { background: rgba(255,75,75,0.2); }
     .action-icon.watchlist { background: rgba(0,200,83,0.2); }
-    .action-text {
-      flex: 1;
-      font-size: 12px;
-      color: rgba(255,255,255,0.8);
-    }
+    .action-icon.skip { background: rgba(100,150,255,0.2); }
+    .action-text { flex: 1; font-size: 12px; color: rgba(255,255,255,0.8); }
     .action-key {
       font-size: 10px;
       background: rgba(255,255,255,0.1);
-      padding: 3px 8px;
+      padding: 2px 7px;
       border-radius: 4px;
-      color: rgba(255,255,255,0.6);
+      color: rgba(255,255,255,0.5);
     }
+
     .tip {
       text-align: center;
       font-size: 11px;
@@ -85,28 +136,93 @@
 <body>
   <div class="logo">VYPODE</div>
   <div class="subtitle">for Letterboxd</div>
-  
+  <div class="version">v5.0.0</div>
+
+  <div class="account-box" id="accountBox">
+    <span class="avatar" id="accountAvatar">&#128100;</span>
+    <div class="info">
+      <div class="name" id="accountName">Checking...</div>
+      <div class="status unlinked" id="accountStatus">Loading</div>
+    </div>
+  </div>
+
+  <div class="stats" id="statsGrid">
+    <div class="stat stat-watched"><span class="stat-num" id="statWatched">-</span><span class="stat-label">Watched</span></div>
+    <div class="stat stat-liked"><span class="stat-num" id="statLiked">-</span><span class="stat-label">Liked</span></div>
+    <div class="stat stat-watchlist"><span class="stat-num" id="statWatchlist">-</span><span class="stat-label">Watchlist</span></div>
+    <div class="stat stat-skipped"><span class="stat-num" id="statSkipped">-</span><span class="stat-label">Skipped</span></div>
+  </div>
+
   <div class="instructions">
-    <h3>🎬 Swipe Controls</h3>
+    <h3>Swipe Controls</h3>
     <div class="action-row">
-      <div class="action-icon watch">👁️</div>
+      <div class="action-icon watch">&#128065;&#65039;</div>
       <div class="action-text">Mark as Watched</div>
-      <div class="action-key">← or Left zone</div>
+      <div class="action-key">&#8592; Left zone</div>
     </div>
     <div class="action-row">
-      <div class="action-icon like">❤️</div>
+      <div class="action-icon like">&#10084;&#65039;</div>
       <div class="action-text">Like this film</div>
-      <div class="action-key">↑ or Top zone</div>
+      <div class="action-key">&#8593; Top zone</div>
     </div>
     <div class="action-row">
-      <div class="action-icon watchlist">📋</div>
+      <div class="action-icon watchlist">&#128203;</div>
       <div class="action-text">Add to Watchlist</div>
-      <div class="action-key">→ or Right zone</div>
+      <div class="action-key">&#8594; Right zone</div>
+    </div>
+    <div class="action-row">
+      <div class="action-icon skip">&#9197;&#65039;</div>
+      <div class="action-text">Skip (deck mode)</div>
+      <div class="action-key">&#8595; Bottom zone</div>
     </div>
   </div>
-  
+
   <div class="tip">
-    Visit any <strong>film page</strong> on Letterboxd and click the <strong>🎴 Vypode</strong> button
+    Visit any <strong>film page</strong> or <strong>list page</strong> on Letterboxd<br>
+    <strong>S</strong> opens settings &bull; <strong>R</strong> opens review
   </div>
+
+  <script>
+    // Load account status and stats from chrome.storage
+    chrome.storage.local.get(['vypode_user', 'vypode_state'], (result) => {
+      const user = result.vypode_user;
+      const state = result.vypode_state;
+
+      // Account
+      const nameEl = document.getElementById('accountName');
+      const statusEl = document.getElementById('accountStatus');
+      if (user && user.username) {
+        nameEl.textContent = user.username;
+        statusEl.textContent = 'Linked';
+        statusEl.className = 'status linked';
+      } else {
+        nameEl.textContent = 'No account linked';
+        statusEl.textContent = 'Log in to Letterboxd and visit any page';
+        statusEl.className = 'status unlinked';
+      }
+
+      // Stats
+      if (state && state.slugs) {
+        const slugs = state.slugs;
+        let watched = 0, liked = 0, watchlist = 0, skipped = 0;
+        for (const slug in slugs) {
+          const e = slugs[slug];
+          if (e.watched) watched++;
+          if (e.liked) liked++;
+          if (e.watchlist) watchlist++;
+          if (e.skipped) skipped++;
+        }
+        document.getElementById('statWatched').textContent = watched;
+        document.getElementById('statLiked').textContent = liked;
+        document.getElementById('statWatchlist').textContent = watchlist;
+        document.getElementById('statSkipped').textContent = skipped;
+      } else {
+        document.getElementById('statWatched').textContent = '0';
+        document.getElementById('statLiked').textContent = '0';
+        document.getElementById('statWatchlist').textContent = '0';
+        document.getElementById('statSkipped').textContent = '0';
+      }
+    });
+  </script>
 </body>
 </html>
