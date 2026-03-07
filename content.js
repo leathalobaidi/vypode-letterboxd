@@ -37,12 +37,22 @@
   // Track how many films were filtered so we can show a badge
   let filteredCount = 0;
 
+  // ── Selector constants ──────────────────────────────────────────────
+
+  const SELECTORS = {
+    watch: '[data-track-action="Watched"], .action.-watch, .film-watch-link-target',
+    like: '[data-track-action="Liked"], .action.-like, .film-like-link-target',
+    watchlist: '[data-track-action="Watchlist"], .action.-watchlist, .film-watch-list-link-target',
+    watchedState: '.action.-watch.-checked, .icon-watched.-on, .film-watch-link-target.icon-watched.-on',
+    likedState: '.action.-like.-checked, .icon-like.-on, .film-like-link-target.icon-like.-on',
+    watchlistState: '.action.-watchlist.-checked, .icon-watchlist.-on, .film-watch-list-link-target.icon-watchlist.-on'
+  };
+
   // ── HTML escaping ───────────────────────────────────────────────────
 
   function escapeHtml(str) {
-    const div = document.createElement('div');
-    div.appendChild(document.createTextNode(str));
-    return div.innerHTML;
+    if (!str) return '';
+    return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#039;');
   }
 
   // ── Account detection ───────────────────────────────────────────────
@@ -205,6 +215,47 @@
     return filtered;
   }
 
+  // Lazy-fetch film details (year, director, genres) for deck cards
+  async function enrichFilmData(film) {
+    if (!film || film.enriched) return;
+    film.enriched = true; // Mark immediately to avoid duplicate fetches
+    try {
+      const response = await fetch(film.url, { credentials: 'same-origin' });
+      if (!response.ok) return;
+      const html = await response.text();
+      const doc = new DOMParser().parseFromString(html, 'text/html');
+
+      film.year = doc.querySelector('.releaseyear a')?.textContent?.trim() || '';
+      film.director = doc.querySelector('.contributor a')?.textContent?.trim() || '';
+      const genreEls = doc.querySelectorAll('.text-sluglist a[href*="/films/genre/"]');
+      film.genres = Array.from(genreEls).slice(0, 3).map(el => el.textContent.trim());
+
+      // Update the card if it's still the one being displayed
+      if (filmDeck[currentDeckIndex] === film) {
+        updateDeckCardMeta(film);
+      }
+    } catch (e) {
+      // Not critical — card still works without enriched metadata
+      film.enriched = false;
+    }
+  }
+
+  function updateDeckCardMeta(film) {
+    const card = document.getElementById('vypodeCard');
+    if (!card) return;
+    const metaEl = card.querySelector('.vypode-card-meta');
+    if (metaEl) {
+      metaEl.innerHTML =
+        (film.year ? '<span>' + escapeHtml(film.year) + '</span>' : '') +
+        (film.rating ? '<span>\u00b7</span><span class="vypode-rating">\u2605 ' + escapeHtml(film.rating) + '</span>' : '') +
+        (film.director ? '<span>\u00b7</span><span>' + escapeHtml(film.director) + '</span>' : '');
+    }
+    const genresEl = card.querySelector('.vypode-card-genres');
+    if (genresEl && film.genres.length > 0) {
+      genresEl.innerHTML = film.genres.map(g => '<span class="vypode-genre-tag">' + escapeHtml(g) + '</span>').join('');
+    }
+  }
+
   function getNextPageUrl() {
     const nextLink = document.querySelector('.paginate-nextprev a.next') ||
                      document.querySelector('a[rel="next"]') ||
@@ -216,17 +267,17 @@
 
   function findButtons() {
     return {
-      watchBtn: document.querySelector('[data-track-action="Watched"]') || document.querySelector('.action.-watch') || document.querySelector('.film-watch-link-target'),
-      likeBtn: document.querySelector('[data-track-action="Liked"]') || document.querySelector('.action.-like') || document.querySelector('.film-like-link-target'),
-      watchlistBtn: document.querySelector('[data-track-action="Watchlist"]') || document.querySelector('.action.-watchlist') || document.querySelector('.film-watch-list-link-target')
+      watchBtn: document.querySelector(SELECTORS.watch),
+      likeBtn: document.querySelector(SELECTORS.like),
+      watchlistBtn: document.querySelector(SELECTORS.watchlist)
     };
   }
 
   function getStates() {
     return {
-      isWatched: document.querySelector('.action.-watch.-checked, .icon-watched.-on, .film-watch-link-target.icon-watched.-on') !== null,
-      isLiked: document.querySelector('.action.-like.-checked, .icon-like.-on, .film-like-link-target.icon-like.-on') !== null,
-      inWatchlist: document.querySelector('.action.-watchlist.-checked, .icon-watchlist.-on, .film-watch-list-link-target.icon-watchlist.-on') !== null
+      isWatched: document.querySelector(SELECTORS.watchedState) !== null,
+      isLiked: document.querySelector(SELECTORS.likedState) !== null,
+      inWatchlist: document.querySelector(SELECTORS.watchlistState) !== null
     };
   }
 
@@ -279,6 +330,8 @@
     isProcessingAction = true;
 
     const film = filmDeck[currentDeckIndex];
+    const prevIndex = currentDeckIndex;
+    const flagMap = { watch: 'watched', like: 'liked', watchlist: 'watchlist' };
 
     // Optimistic update — mark film and persist immediately so the user
     // can keep swiping without waiting for Letterboxd to respond.
@@ -288,19 +341,37 @@
     film.actioned = true;
 
     if (film.slug && window.VypodeFilmState) {
-      const flagMap = { watch: 'watched', like: 'liked', watchlist: 'watchlist' };
       window.VypodeFilmState.setFlag(film.slug, flagMap[action], true, 'userAction');
     }
 
     const messages = { watch: 'Marked as watched!', like: 'Liked!', watchlist: 'Added to Watchlist!' };
-    showFeedback(messages[action], action);
+
+    // Show undo toast — user has 5s to reverse
+    showUndoToast(messages[action], action, () => {
+      // Undo: revert optimistic state
+      if (action === 'watch') film.isWatched = false;
+      else if (action === 'like') film.isLiked = false;
+      else if (action === 'watchlist') film.inWatchlist = false;
+      film.actioned = false;
+      if (film.slug && window.VypodeFilmState) {
+        window.VypodeFilmState.setFlag(film.slug, flagMap[action], false, 'userAction');
+      }
+      // Remove from action queue if still pending
+      const qIdx = actionQueue.findIndex(q => q.filmUrl === filmUrl && q.action === action);
+      if (qIdx !== -1) actionQueue.splice(qIdx, 1);
+      // Go back to the undone card
+      currentDeckIndex = prevIndex;
+      updateDeckCard();
+      updateProgress();
+      showFeedback('Undone!', 'skip');
+    });
 
     // Advance to the next card right away
     advanceToNextCard();
     isProcessingAction = false;
 
     // Queue the actual Letterboxd action for background processing
-    actionQueue.push({ filmUrl, action });
+    actionQueue.push({ filmUrl, action, retries: 0 });
     processActionQueue();
   }
 
@@ -308,16 +379,31 @@
     if (isProcessingQueue || actionQueue.length === 0) return;
     isProcessingQueue = true;
 
-    const { filmUrl, action } = actionQueue.shift();
+    const item = actionQueue.shift();
+    const { filmUrl, action, retries = 0 } = item;
 
     const iframe = document.createElement('iframe');
     iframe.style.cssText = 'position:fixed;top:-9999px;left:-9999px;width:1px;height:1px;opacity:0;pointer-events:none;';
     document.body.appendChild(iframe);
 
-    const timeout = setTimeout(() => {
+    const onFail = () => {
       iframe.remove();
-      isProcessingQueue = false;
-      processActionQueue();
+      // Retry up to 3 times with increasing delay
+      if (retries < 3) {
+        setTimeout(() => {
+          actionQueue.push({ filmUrl, action, retries: retries + 1 });
+          isProcessingQueue = false;
+          processActionQueue();
+        }, (retries + 1) * 1000);
+      } else {
+        console.warn('Vypode: action failed after 3 retries', action, filmUrl);
+        isProcessingQueue = false;
+        processActionQueue();
+      }
+    };
+
+    const timeout = setTimeout(() => {
+      onFail();
     }, 10000);
 
     iframe.onload = function() {
@@ -325,43 +411,31 @@
         const iframeDoc = iframe.contentDocument || iframe.contentWindow.document;
 
         setTimeout(() => {
-          let btn = null;
-          if (action === 'watch') {
-            btn = iframeDoc.querySelector('[data-track-action="Watched"]') ||
-                  iframeDoc.querySelector('.action.-watch') ||
-                  iframeDoc.querySelector('.film-watch-link-target');
-          } else if (action === 'like') {
-            btn = iframeDoc.querySelector('[data-track-action="Liked"]') ||
-                  iframeDoc.querySelector('.action.-like') ||
-                  iframeDoc.querySelector('.film-like-link-target');
-          } else if (action === 'watchlist') {
-            btn = iframeDoc.querySelector('[data-track-action="Watchlist"]') ||
-                  iframeDoc.querySelector('.action.-watchlist') ||
-                  iframeDoc.querySelector('.film-watch-list-link-target');
-          }
+          const selectorMap = { watch: SELECTORS.watch, like: SELECTORS.like, watchlist: SELECTORS.watchlist };
+          const btn = iframeDoc.querySelector(selectorMap[action]);
 
-          if (btn) btn.click();
-
-          setTimeout(() => {
+          if (btn) {
+            btn.click();
+            setTimeout(() => {
+              clearTimeout(timeout);
+              iframe.remove();
+              isProcessingQueue = false;
+              processActionQueue();
+            }, 300);
+          } else {
             clearTimeout(timeout);
-            iframe.remove();
-            isProcessingQueue = false;
-            processActionQueue();
-          }, 300);
+            onFail();
+          }
         }, 800);
       } catch (e) {
         clearTimeout(timeout);
-        iframe.remove();
-        isProcessingQueue = false;
-        processActionQueue();
+        onFail();
       }
     };
 
     iframe.onerror = function() {
       clearTimeout(timeout);
-      iframe.remove();
-      isProcessingQueue = false;
-      processActionQueue();
+      onFail();
     };
 
     iframe.src = filmUrl;
@@ -516,20 +590,121 @@
 
   // ── Deck navigation ─────────────────────────────────────────────────
 
+  // Track the current next-page URL (updated as we load more pages)
+  let currentNextPageUrl = null;
+  let isLoadingMore = false;
+
   function advanceToNextCard() {
     if (currentDeckIndex < filmDeck.length - 1) {
       currentDeckIndex++;
       updateDeckCard();
       updateProgress();
+      // Pre-fetch film details for the new card
+      enrichFilmData(filmDeck[currentDeckIndex]);
     } else {
-      const nextPageUrl = getNextPageUrl();
-      if (nextPageUrl) {
-        showFeedback('Syncing actions & loading next page...', 'watch');
-        waitForQueueDrain(() => { window.location.href = nextPageUrl + '#vypode-auto'; });
+      const nextUrl = currentNextPageUrl || getNextPageUrl();
+      if (nextUrl) {
+        loadNextPageFilms(nextUrl);
       } else {
         showFeedback('All done! No more pages.', 'watchlist');
       }
     }
+  }
+
+  async function loadNextPageFilms(url) {
+    if (isLoadingMore) return;
+    isLoadingMore = true;
+    showFeedback('Loading more films...', 'watch');
+
+    try {
+      const response = await fetch(url, { credentials: 'same-origin' });
+      if (!response.ok) throw new Error('Failed to load page');
+
+      const html = await response.text();
+      const doc = new DOMParser().parseFromString(html, 'text/html');
+
+      // Extract films from the fetched page DOM
+      const newFilms = extractFilmsFromDoc(doc);
+      const filtered = filterFilmDeck(newFilms);
+
+      // Update the next-page URL from the fetched document
+      const nextLink = doc.querySelector('.paginate-nextprev a.next') || doc.querySelector('a[rel="next"]');
+      currentNextPageUrl = nextLink ? 'https://letterboxd.com' + nextLink.getAttribute('href') : null;
+
+      if (filtered.length > 0) {
+        filmDeck.push(...filtered);
+        currentDeckIndex++;
+        updateDeckCard();
+        updateProgress();
+        enrichFilmData(filmDeck[currentDeckIndex]);
+        showFeedback('Loaded ' + filtered.length + ' more films', 'watchlist');
+      } else if (currentNextPageUrl) {
+        // All films on this page were filtered — try the next one
+        isLoadingMore = false;
+        loadNextPageFilms(currentNextPageUrl);
+        return;
+      } else {
+        showFeedback('All done! No more pages.', 'watchlist');
+      }
+    } catch (e) {
+      // Fallback: full page navigation
+      showFeedback('Syncing actions & loading next page...', 'watch');
+      waitForQueueDrain(() => { window.location.href = url + '#vypode-auto'; });
+    }
+
+    isLoadingMore = false;
+  }
+
+  function extractFilmsFromDoc(doc) {
+    const films = [];
+    const seen = new Set();
+    const posterContainers = doc.querySelectorAll('.poster-container, .film-poster, .poster');
+
+    posterContainers.forEach(container => {
+      const link = container.querySelector('a[href*="/film/"]') || container.closest('a[href*="/film/"]');
+      const img = container.querySelector('img');
+      const filmPoster = container.closest('.poster-container') || container;
+
+      if (link && img) {
+        const href = link.getAttribute('href');
+        const filmSlug = href.match(/\/film\/([^\/]+)/)?.[1];
+        if (!filmSlug || seen.has(filmSlug)) return;
+        seen.add(filmSlug);
+
+        // Also skip if already in the current deck
+        if (filmDeck.some(f => f.slug === filmSlug)) return;
+
+        let title = img.alt || container.getAttribute('data-film-name') || filmSlug?.replace(/-/g, ' ') || 'Unknown';
+        title = title.replace(/^Poster for /i, '');
+
+        let posterUrl = img.src || img.dataset.src || '';
+        if (posterUrl.includes('empty-poster') || !posterUrl) {
+          posterUrl = img.srcset?.split(',')[0]?.trim()?.split(' ')[0] || '';
+        }
+        if (posterUrl) {
+          posterUrl = posterUrl.replace(/-0-\d+-0-\d+-crop/, '-0-460-0-690-crop')
+                               .replace(/-\d+-\d+-\d+-\d+-crop/, '-0-460-0-690-crop');
+        }
+
+        const ratingEl = filmPoster.querySelector('.rating') || filmPoster.querySelector('[class*="rating"]');
+        const overlay = filmPoster.querySelector('.film-poster-overlay, .overlay');
+
+        films.push({
+          title: title.charAt(0).toUpperCase() + title.slice(1),
+          year: '', poster: posterUrl,
+          rating: ratingEl?.textContent?.trim() || '',
+          director: '', genres: [],
+          url: 'https://letterboxd.com' + href,
+          slug: filmSlug,
+          isWatched: overlay?.querySelector('.icon-watched.-on, .action.-watched.-checked') !== null,
+          isLiked: overlay?.querySelector('.icon-like.-on, .action.-like.-checked') !== null,
+          inWatchlist: overlay?.querySelector('.icon-watchlist.-on, .action.-watchlist.-checked') !== null,
+          actioned: false
+        });
+      }
+    });
+
+    return films;
   }
 
   function waitForQueueDrain(callback, elapsed) {
@@ -543,6 +718,7 @@
 
   function skipCurrentFilm() {
     const film = filmDeck[currentDeckIndex];
+    const prevIndex = currentDeckIndex;
     film.actioned = true;
 
     // Durable skip: persist to FilmState
@@ -550,7 +726,17 @@
       window.VypodeFilmState.setFlag(film.slug, 'skipped', true, 'userAction');
     }
 
-    showFeedback('Skipped', 'skip');
+    showUndoToast('Skipped', 'skip', () => {
+      film.actioned = false;
+      if (film.slug && window.VypodeFilmState) {
+        window.VypodeFilmState.setFlag(film.slug, 'skipped', false, 'userAction');
+      }
+      currentDeckIndex = prevIndex;
+      updateDeckCard();
+      updateProgress();
+      showFeedback('Undone!', 'skip');
+    });
+
     advanceToNextCard();
   }
 
@@ -563,6 +749,25 @@
     document.body.appendChild(toast);
     setTimeout(() => toast.classList.add('show'), 10);
     setTimeout(() => { toast.classList.remove('show'); setTimeout(() => toast.remove(), 300); }, 2000);
+  }
+
+  function showUndoToast(message, type, undoCallback) {
+    const existing = document.querySelector('.vypode-toast');
+    if (existing) existing.remove();
+    const toast = document.createElement('div');
+    toast.className = 'vypode-toast vypode-toast-' + type + ' vypode-toast-undo';
+    toast.innerHTML = '<span>' + escapeHtml(message) + '</span><button class="vypode-undo-btn">Undo</button>';
+    document.body.appendChild(toast);
+    let undone = false;
+    toast.querySelector('.vypode-undo-btn').addEventListener('click', () => {
+      if (undone) return;
+      undone = true;
+      undoCallback();
+      toast.classList.remove('show');
+      setTimeout(() => toast.remove(), 300);
+    });
+    setTimeout(() => toast.classList.add('show'), 10);
+    setTimeout(() => { if (!undone) { toast.classList.remove('show'); setTimeout(() => toast.remove(), 300); } }, 5000);
   }
 
   function updateProgress() {
@@ -592,16 +797,14 @@
     try {
       const results = { watched: 0, watchlist: 0, liked: 0 };
 
-      // 1. Sync watched films from /{username}/films/
-      const watchedSlugs = await fetchAllFilmSlugs(`/${letterboxdUsername}/films/`);
+      // Fetch all three collections in parallel (~3x faster)
+      const [watchedSlugs, watchlistSlugs, likedSlugs] = await Promise.all([
+        fetchAllFilmSlugs(`/${letterboxdUsername}/films/`),
+        fetchAllFilmSlugs(`/${letterboxdUsername}/watchlist/`),
+        fetchAllFilmSlugs(`/${letterboxdUsername}/likes/films/`)
+      ]);
       results.watched = watchedSlugs.length;
-
-      // 2. Sync watchlist from /{username}/watchlist/
-      const watchlistSlugs = await fetchAllFilmSlugs(`/${letterboxdUsername}/watchlist/`);
       results.watchlist = watchlistSlugs.length;
-
-      // 3. Sync liked films from /{username}/likes/films/
-      const likedSlugs = await fetchAllFilmSlugs(`/${letterboxdUsername}/likes/films/`);
       results.liked = likedSlugs.length;
 
       // Build bulk update map
@@ -646,7 +849,7 @@
 
   // Fetch all film slugs from paginated Letterboxd pages
   async function fetchAllFilmSlugs(basePath) {
-    const slugs = [];
+    const slugs = new Set();
     let page = 1;
     const maxPages = 100; // Safety cap: 100 pages x 72 films = 7,200 films max
 
@@ -661,8 +864,7 @@
         if (!response.ok) break;
 
         const html = await response.text();
-        const parser = new DOMParser();
-        const doc = parser.parseFromString(html, 'text/html');
+        const doc = new DOMParser().parseFromString(html, 'text/html');
 
         // Extract film slugs from poster links
         const links = doc.querySelectorAll('a[href*="/film/"]');
@@ -672,8 +874,8 @@
           const match = link.getAttribute('href')?.match(/\/film\/([^\/]+)/);
           if (match && match[1]) {
             const slug = match[1];
-            if (!slugs.includes(slug)) {
-              slugs.push(slug);
+            if (!slugs.has(slug)) {
+              slugs.add(slug);
               foundOnPage++;
             }
           }
@@ -694,7 +896,7 @@
       }
     }
 
-    return slugs;
+    return Array.from(slugs);
   }
 
   function sleep(ms) {
@@ -752,7 +954,7 @@
     recognition = new SpeechRecognition();
     recognition.continuous = false;
     recognition.interimResults = true;
-    recognition.lang = 'en-GB';
+    recognition.lang = navigator.language || 'en';
 
     recognition.onresult = (event) => {
       const textarea = document.getElementById('vypodeReviewText');
@@ -832,8 +1034,21 @@
     }
   }
 
-  function setRating(stars) {
-    currentRating = stars;
+  function setRating(value) {
+    // Click same full star -> half star; click same half -> clear to below
+    if (currentRating === value) {
+      currentRating = value - 0.5;
+    } else if (currentRating === value - 0.5) {
+      currentRating = value - 1;
+    } else {
+      currentRating = value;
+    }
+    if (currentRating < 0) currentRating = 0;
+    updateRatingDisplay();
+  }
+
+  function setHalfRating(value) {
+    currentRating = value;
     updateRatingDisplay();
   }
 
@@ -841,11 +1056,23 @@
     const starContainer = document.getElementById('vypodeStars');
     if (!starContainer) return;
     starContainer.querySelectorAll('.vypode-star').forEach((btn, i) => {
-      btn.classList.toggle('active', i < currentRating);
+      const starValue = i + 1;
+      btn.classList.remove('active', 'half');
+      if (currentRating >= starValue) {
+        btn.classList.add('active');
+      } else if (currentRating >= starValue - 0.5) {
+        btn.classList.add('half');
+      }
     });
     const ratingText = document.getElementById('vypodeRatingText');
     if (ratingText) {
-      ratingText.textContent = currentRating > 0 ? '\u2605'.repeat(currentRating) + ' (' + currentRating + '/5)' : 'No rating';
+      if (currentRating > 0) {
+        const fullStars = Math.floor(currentRating);
+        const hasHalf = currentRating % 1 !== 0;
+        ratingText.textContent = '\u2605'.repeat(fullStars) + (hasHalf ? '\u00bd' : '') + ' (' + currentRating + '/5)';
+      } else {
+        ratingText.textContent = 'No rating';
+      }
     }
   }
 
@@ -866,7 +1093,7 @@
           <button class="vypode-review-close" id="vypodeReviewClose">\u2715</button>
         </div>
         <div class="vypode-rating-section">
-          <label>Rating (click stars or press 1-5 when not typing):</label>
+          <label>Rating (click again for half-star, Shift+1-5 for half):</label>
           <div class="vypode-stars" id="vypodeStars">
             ${[1,2,3,4,5].map(i => `<button class="vypode-star" data-rating="${i}">\u2605</button>`).join('')}
           </div>
@@ -886,7 +1113,7 @@
           <button class="vypode-btn vypode-btn-submit" id="vypodeReviewSubmit">Submit Review</button>
         </div>
         <div class="vypode-review-shortcuts">
-          <span>Shortcuts: <b>1-5</b> stars (when not typing) &bull; <b>Esc</b> close &bull; <b>Enter</b> submit</span>
+          <span><b>1-5</b> stars &bull; <b>Shift+1-5</b> half &bull; <b>Esc</b> close &bull; <b>Enter</b> submit</span>
         </div>
       </div>
     `;
@@ -1243,6 +1470,8 @@
       { isWatched: film.isWatched, isLiked: film.isLiked, inWatchlist: film.inWatchlist },
       true
     );
+    // Lazy-fetch film details for the first card
+    enrichFilmData(film);
   }
 
   function createVypodeOverlay(film, states, isDeck) {
@@ -1428,6 +1657,74 @@
     card.addEventListener('mouseenter', () => { isOverCard = true; cursor.classList.add('visible'); });
     card.addEventListener('mouseleave', () => { isOverCard = false; currentZone = 'neutral'; cursor.classList.remove('visible'); cursor.className = 'vypode-cursor-ring'; resetCardVisuals(card); });
 
+    // Touch / swipe gestures
+    let touchStartX = 0, touchStartY = 0, touchStartTime = 0;
+
+    card.addEventListener('touchstart', (e) => {
+      const touch = e.touches[0];
+      touchStartX = touch.clientX;
+      touchStartY = touch.clientY;
+      touchStartTime = Date.now();
+      card.style.transition = 'none';
+    }, { passive: true });
+
+    card.addEventListener('touchmove', (e) => {
+      e.preventDefault();
+      const touch = e.touches[0];
+      const dx = touch.clientX - touchStartX;
+      const dy = touch.clientY - touchStartY;
+      card.style.transform = 'translate(' + dx + 'px, ' + dy + 'px) rotate(' + (dx * 0.05) + 'deg)';
+
+      // Show zone overlays based on dominant direction
+      resetCardVisuals(card);
+      const absDx = Math.abs(dx), absDy = Math.abs(dy);
+      if (absDx > 30 || absDy > 30) {
+        if (absDx > absDy) {
+          if (dx < -30) card.querySelector('.vypode-swipe-overlay.watch').style.opacity = Math.min(1, absDx / 120);
+          else if (dx > 30) card.querySelector('.vypode-swipe-overlay.watchlist').style.opacity = Math.min(1, absDx / 120);
+        } else {
+          if (dy < -30) card.querySelector('.vypode-swipe-overlay.like').style.opacity = Math.min(1, absDy / 120);
+          else if (dy > 30 && isDeck) card.querySelector('.vypode-swipe-overlay.skip').style.opacity = Math.min(1, absDy / 120);
+        }
+      }
+    }, { passive: false });
+
+    card.addEventListener('touchend', (e) => {
+      const touch = e.changedTouches[0];
+      const dx = touch.clientX - touchStartX;
+      const dy = touch.clientY - touchStartY;
+      const elapsed = Date.now() - touchStartTime;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+      const velocity = dist / Math.max(elapsed, 1);
+
+      card.style.transition = 'transform 0.3s ease';
+      card.style.transform = '';
+      resetCardVisuals(card);
+
+      // Trigger if displacement > 80px or fast flick > 0.5px/ms
+      const triggered = dist > 80 || (velocity > 0.5 && dist > 30);
+      if (triggered && !isProcessingAction) {
+        const angle = Math.atan2(dy, dx) * 180 / Math.PI;
+        if (angle > 135 || angle < -135) {
+          // Left = watched
+          animateAction('left');
+          setTimeout(() => { isDeck ? performBackgroundAction(filmDeck[currentDeckIndex].url, 'watch') : performWatch(); }, 300);
+        } else if (angle > -45 && angle < 45) {
+          // Right = watchlist
+          animateAction('right');
+          setTimeout(() => { isDeck ? performBackgroundAction(filmDeck[currentDeckIndex].url, 'watchlist') : performWatchlist(); }, 300);
+        } else if (angle < -45 && angle >= -135) {
+          // Up = like
+          animateAction('up');
+          setTimeout(() => { isDeck ? performBackgroundAction(filmDeck[currentDeckIndex].url, 'like') : performLike(); }, 300);
+        } else if (angle > 45 && angle <= 135 && isDeck) {
+          // Down = skip
+          animateAction('down');
+          setTimeout(() => skipCurrentFilm(), 300);
+        }
+      }
+    });
+
     card.addEventListener('mousemove', (e) => {
       if (isProcessingAction) return;
       const rect = card.getBoundingClientRect();
@@ -1465,6 +1762,7 @@
       }
     });
 
+    document.removeEventListener('keydown', handleKeyDown);
     document.addEventListener('keydown', handleKeyDown);
   }
 
@@ -1475,7 +1773,11 @@
     if (reviewPanelVisible) {
       if (e.key >= '1' && e.key <= '5' && !isUserTyping()) {
         e.preventDefault();
-        setRating(parseInt(e.key));
+        if (e.shiftKey) {
+          setHalfRating(parseInt(e.key) - 0.5);
+        } else {
+          setRating(parseInt(e.key));
+        }
       } else if (e.key === 'Enter' && !e.shiftKey && !isUserTyping()) {
         e.preventDefault();
         document.getElementById('vypodeReviewSubmit')?.click();
@@ -1514,7 +1816,11 @@
     if (e.key >= '1' && e.key <= '5') {
       e.preventDefault();
       showReviewPanel();
-      setTimeout(() => setRating(parseInt(e.key)), 100);
+      const val = parseInt(e.key);
+      setTimeout(() => {
+        if (e.shiftKey) setHalfRating(val - 0.5);
+        else setRating(val);
+      }, 100);
       return;
     }
 

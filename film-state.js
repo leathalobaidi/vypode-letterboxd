@@ -42,29 +42,30 @@
   // ── Storage I/O ─────────────────────────────────────────────────────
 
   async function loadFromStorage() {
-    return new Promise((resolve) => {
-      chrome.storage.local.get([STORAGE_KEY], (result) => {
-        const raw = result[STORAGE_KEY];
-        if (raw && typeof raw === 'object') {
-          // Migration gate: check version
-          const version = raw._meta?.version || 0;
-          if (version < DATA_VERSION) {
-            migrateData(raw, version);
-          }
-          meta = raw._meta || meta;
-          registry = raw.slugs || {};
-        }
-        loaded = true;
-        resolve();
-      });
+    const [localResult, syncResult] = await Promise.all([
+      new Promise((resolve) => {
+        chrome.storage.local.get([STORAGE_KEY], resolve);
+      }),
+      new Promise((resolve) => {
+        chrome.storage.sync.get([PREFS_KEY], resolve);
+      })
+    ]);
 
-      // Also load prefs from sync storage
-      chrome.storage.sync.get([PREFS_KEY], (result) => {
-        if (result[PREFS_KEY]) {
-          prefs = { ...DEFAULT_PREFS, ...result[PREFS_KEY] };
-        }
-      });
-    });
+    const raw = localResult[STORAGE_KEY];
+    if (raw && typeof raw === 'object') {
+      const version = raw._meta?.version || 0;
+      if (version < DATA_VERSION) {
+        migrateData(raw, version);
+      }
+      meta = raw._meta || meta;
+      registry = raw.slugs || {};
+    }
+
+    if (syncResult[PREFS_KEY]) {
+      prefs = { ...DEFAULT_PREFS, ...syncResult[PREFS_KEY] };
+    }
+
+    loaded = true;
   }
 
   function saveToStorage() {
@@ -284,7 +285,13 @@
           registry[slug].skippedAt = null;
         }
       }
-      saveToStorage();
+      return new Promise((resolve) => {
+        const payload = {
+          _meta: { ...meta, version: DATA_VERSION },
+          slugs: registry
+        };
+        chrome.storage.local.set({ [STORAGE_KEY]: payload }, resolve);
+      });
     },
 
     // ── Internal: notify background ─────────────────────────────────
