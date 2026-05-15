@@ -260,7 +260,27 @@
     const nextLink = document.querySelector('.paginate-nextprev a.next') ||
                      document.querySelector('a[rel="next"]') ||
                      document.querySelector('.pagination a.next');
-    return nextLink?.href || null;
+    if (nextLink?.href) return nextLink.href;
+    // Fallback: infer /page/N/ from current URL (Letterboxd listing pattern)
+    return inferNextPageUrl(window.location.href);
+  }
+
+  function inferNextPageUrl(href) {
+    try {
+      const u = new URL(href);
+      const m = u.pathname.match(/^(.*?)\/page\/(\d+)\/?$/);
+      if (m) {
+        u.pathname = `${m[1]}/page/${parseInt(m[2], 10) + 1}/`;
+        return u.toString();
+      }
+      // No /page/N/ — assume current is page 1, jump to page 2
+      u.pathname = u.pathname.replace(/\/$/, '') + '/page/2/';
+      return u.toString();
+    } catch { return null; }
+  }
+
+  function inferNextPageUrlFromDoc(fetchedUrl) {
+    return inferNextPageUrl(fetchedUrl);
   }
 
   // ── Action buttons (single film page) ──────────────────────────────
@@ -332,6 +352,7 @@
     const film = filmDeck[currentDeckIndex];
     const prevIndex = currentDeckIndex;
     const flagMap = { watch: 'watched', like: 'liked', watchlist: 'watchlist' };
+    const dirMap = { watch: 'left', like: 'up', watchlist: 'right' };
 
     // Optimistic update — mark film and persist immediately so the user
     // can keep swiping without waiting for Letterboxd to respond.
@@ -366,13 +387,28 @@
       showFeedback('Undone!', 'skip');
     });
 
-    // Advance to the next card right away
-    advanceToNextCard();
-    isProcessingAction = false;
-
-    // Queue the actual Letterboxd action for background processing
+    // Queue the actual Letterboxd action (non-blocking)
     actionQueue.push({ filmUrl, action, retries: 0 });
     processActionQueue();
+
+    // Visual flyoff + next-card rise, parallel with action queue
+    const hasNext = currentDeckIndex < filmDeck.length - 1;
+    if (hasNext) {
+      runSwipeAnimation(dirMap[action]);
+      currentDeckIndex++;
+      updateProgress();
+      enrichFilmData(filmDeck[currentDeckIndex]);
+      preloadNextPosters(currentDeckIndex + 1, 10);
+      setTimeout(() => {
+        populateCurrentCard(filmDeck[currentDeckIndex]);
+        populateNextCard(filmDeck[currentDeckIndex + 1]);
+        resetCardStack();
+        isProcessingAction = false;
+      }, 200);
+    } else {
+      advanceToNextCard();
+      isProcessingAction = false;
+    }
   }
 
   function processActionQueue() {
@@ -443,150 +479,129 @@
 
   // ── Review submission ───────────────────────────────────────────────
 
-  function submitReview(filmUrl, reviewText, rating) {
+  function vyLog(...args) { console.log('[Vypode]', ...args); }
+  function vyWarn(...args) { console.warn('[Vypode]', ...args); }
+
+  // Direct API submission — POSTs to /s/save-diary-entry like Letterboxd's own modal does.
+  // Avoids the fragile hidden-iframe DOM-scraping approach entirely.
+  async function submitReview(filmUrl, reviewText, rating) {
     if (isProcessingAction) return;
     isProcessingAction = true;
 
     const fullReview = reviewText || '';
+    vyLog('submitReview: url=%s rating=%d reviewLen=%d', filmUrl, rating, fullReview.length);
     if (!fullReview && rating <= 0) {
+      vyWarn('submitReview: nothing to submit (empty review + rating=0)');
       isProcessingAction = false;
       return;
     }
 
+    const filmSlug = (filmUrl.match(/\/film\/([^\/]+)/) || [])[1];
     showFeedback('Submitting review...', 'watchlist');
 
-    if (actionIframe) actionIframe.remove();
-    actionIframe = document.createElement('iframe');
-    actionIframe.style.cssText = 'position:fixed;top:-9999px;left:-9999px;width:1024px;height:768px;opacity:0;pointer-events:none;';
-    document.body.appendChild(actionIframe);
+    try {
+      if (!filmSlug) throw new Error('Could not parse film slug from ' + filmUrl);
+      // Normalize to the canonical film page. Deck URLs can be user-scoped
+      // (/<user>/film/<slug>/) which 404 for unlogged films — the canonical
+      // /film/<slug>/ page always exists and carries CSRF + production-uid.
+      const canonicalUrl = 'https://letterboxd.com/film/' + filmSlug + '/';
+      vyLog('fetching film page for CSRF + UID:', canonicalUrl);
+      const r = await fetch(canonicalUrl, { credentials: 'same-origin', cache: 'no-store' });
+      if (!r.ok) throw new Error('Film page fetch failed: ' + r.status);
+      const html = await r.text();
+      const doc = new DOMParser().parseFromString(html, 'text/html');
 
-    iframeTimeout = setTimeout(() => {
-      reviewFallback(filmUrl, fullReview, rating, 'Review timed out');
-    }, 15000);
+      const csrf = doc.querySelector('input[name="__csrf"]')?.value;
+      // data-production-uid is on every film page; data-watchable-uid only on
+      // review elements (missing on films with no visible reviews).
+      const watchableUid =
+        doc.querySelector('[data-production-uid]')?.dataset?.productionUid ||
+        doc.querySelector('[data-watchable-uid]')?.dataset?.watchableUid;
+      vyLog('parsed csrf?', !!csrf, csrf === 'placeholder' ? '(placeholder!)' : '', 'uid?', watchableUid);
 
-    actionIframe.onerror = function() {
-      reviewFallback(filmUrl, fullReview, rating, 'Error loading film page');
-    };
+      if (!csrf || csrf === 'placeholder') throw new Error('Not logged in to Letterboxd');
+      if (!watchableUid) throw new Error('Could not identify film (no production-uid)');
 
-    actionIframe.onload = function() {
-      try {
-        const iframeDoc = actionIframe.contentDocument || actionIframe.contentWindow.document;
+      // 3. Build form data — diary entry with today's date so it lands on profile
+      const today = new Date();
+      const dateStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+      const form = new URLSearchParams();
+      form.set('__csrf', csrf);
+      form.set('viewingId', '');
+      form.set('viewingableUid', watchableUid);
+      form.set('specifiedDate', 'true');
+      form.set('viewingDateStr', dateStr);
+      if (fullReview) form.set('review', fullReview);
+      if (rating > 0) form.set('rating', String(rating * 2)); // 0-10 half-star scale
+      form.set('rewatch', 'false');
+      form.set('containsSpoilers', 'false');
+      form.set('tags', '');
+      vyLog('POST /s/save-diary-entry payload keys:', [...form.keys()]);
 
-        setTimeout(() => {
-          const reviewBtn = iframeDoc.querySelector('.add-this-film');
-          if (!reviewBtn) {
-            reviewFallback(filmUrl, fullReview, rating, 'Could not find review button');
-            return;
-          }
+      const resp = await fetch('https://letterboxd.com/s/save-diary-entry', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'X-Requested-With': 'XMLHttpRequest' },
+        body: form,
+      });
+      const text = await resp.text();
+      vyLog('save-diary-entry status:', resp.status, 'body preview:', text.slice(0, 400));
 
-          reviewBtn.click();
+      if (!resp.ok) throw new Error('Server returned ' + resp.status);
 
-          let pollCount = 0;
-          const pollInterval = setInterval(() => {
-            pollCount++;
-            const modal = iframeDoc.querySelector('#add-film');
-            if (modal) {
-              clearInterval(pollInterval);
-              fillAndSubmitReview(iframeDoc, modal, filmUrl, fullReview, rating);
-            } else if (pollCount >= 20) {
-              clearInterval(pollInterval);
-              reviewFallback(filmUrl, fullReview, rating, 'Review form did not open');
-            }
-          }, 250);
-        }, 1500);
-      } catch (e) {
-        reviewFallback(filmUrl, fullReview, rating, 'Error accessing film page');
+      // Letterboxd typically returns JSON {result: true, ...} on success
+      let result = null;
+      try { result = JSON.parse(text); } catch {}
+      if (result && result.result === false) {
+        throw new Error(result.messages?.join(', ') || 'Letterboxd rejected entry');
       }
-    };
 
-    actionIframe.src = filmUrl;
-  }
-
-  function fillAndSubmitReview(iframeDoc, modal, filmUrl, reviewText, rating) {
-    if (reviewText) {
-      const textarea = modal.querySelector('textarea') ||
-                       iframeDoc.querySelector('#diary-entry-review');
-      if (textarea) {
-        textarea.value = reviewText;
-        textarea.dispatchEvent(new Event('input', { bubbles: true }));
-        textarea.dispatchEvent(new Event('change', { bubbles: true }));
-      }
-    }
-
-    if (rating > 0) {
-      const lbRating = rating * 2; // Letterboxd uses half-star scale 1-10
-      const rateWidget = modal.querySelector('.rateit');
-      if (rateWidget && rateWidget.dataset.rateAction) {
-        const csrf = iframeDoc.querySelector('input[name="__csrf"]')?.value;
-        if (csrf) {
-          const ratingData = new FormData();
-          ratingData.set('rating', lbRating);
-          ratingData.set('__csrf', csrf);
-          const rateUrl = rateWidget.dataset.rateAction.startsWith('http')
-            ? rateWidget.dataset.rateAction
-            : new URL(rateWidget.dataset.rateAction, filmUrl).href;
-          fetch(rateUrl, { method: 'POST', body: ratingData }).catch(() => {});
-        }
-      }
-      const ratingInput = modal.querySelector('input[name="rating"]');
-      if (ratingInput) {
-        ratingInput.value = lbRating;
-        ratingInput.dispatchEvent(new Event('change', { bubbles: true }));
-      }
-    }
-
-    setTimeout(() => {
-      const submitBtn = iframeDoc.querySelector('#diary-entry-submit-button') ||
-                        modal.querySelector('input[type="submit"]') ||
-                        modal.querySelector('button[type="submit"]');
-      if (submitBtn) {
-        submitBtn.click();
-        clearTimeout(iframeTimeout);
-        setTimeout(() => {
-          showFeedback('Review submitted!', 'watchlist');
-          cleanupIframe();
-          hideReviewPanel();
-          if (isListingPage) {
-            filmDeck[currentDeckIndex].actioned = true;
-            advanceToNextCard();
-          }
-        }, 2000);
-      } else {
-        reviewFallback(filmUrl, reviewText, rating, 'Could not find submit button');
-      }
-    }, 500);
-  }
-
-  function reviewFallback(filmUrl, reviewText, rating, reason) {
-    clearTimeout(iframeTimeout);
-    const ratingStars = rating > 0 ? '\u2605'.repeat(rating) + '\u2606'.repeat(5 - rating) : '';
-    const clipboardText = ((ratingStars ? ratingStars + '\n' : '') + reviewText).trim();
-
-    const openPage = () => {
-      setTimeout(() => {
-        window.open(filmUrl, '_blank');
-        cleanupIframe();
+      // 4. Verify by checking diary
+      await verifyReviewSubmitted(filmSlug, rating, () => {
         hideReviewPanel();
         if (isListingPage) {
           filmDeck[currentDeckIndex].actioned = true;
           advanceToNextCard();
         }
-      }, 500);
-    };
-
-    if (clipboardText) {
-      navigator.clipboard.writeText(clipboardText).then(() => {
-        showFeedback(reason + ' \u2014 review copied, opening film page', 'error');
-        openPage();
-      }).catch(() => {
-        showFeedback(reason + ' \u2014 opening film page', 'error');
-        openPage();
       });
-    } else {
-      showFeedback(reason + ' \u2014 opening film page', 'error');
-      openPage();
+    } catch (e) {
+      vyWarn('submitReview failed:', e.message);
+      // No tab fallback — keep the review panel open so the user can retry.
+      showFeedback('Review failed: ' + e.message + ' — try again', 'error');
+    } finally {
+      isProcessingAction = false;
     }
   }
+
+
+  async function verifyReviewSubmitted(filmSlug, rating, doneCallback) {
+    // Wait for Letterboxd to persist, then check diary
+    await new Promise(r => setTimeout(r, 3000));
+    if (!letterboxdUsername || !filmSlug) {
+      vyWarn('verifyReviewSubmitted: skipped — missing username or slug');
+      showFeedback('Review sent — could not verify (no username)', 'watchlist');
+      doneCallback();
+      return;
+    }
+    try {
+      const diaryUrl = `https://letterboxd.com/${letterboxdUsername}/films/diary/`;
+      const resp = await fetch(diaryUrl, { credentials: 'same-origin', cache: 'no-store' });
+      const html = await resp.text();
+      const found = html.includes(`/film/${filmSlug}/`);
+      vyLog('verifyReviewSubmitted: diary fetch status', resp.status, 'film slug present?', found);
+      if (found) {
+        showFeedback('Review submitted!', 'watchlist');
+      } else {
+        vyWarn('verifyReviewSubmitted: film not in diary — submit likely failed');
+        showFeedback('Review may not have submitted — check your diary', 'error');
+      }
+    } catch (e) {
+      vyWarn('verifyReviewSubmitted: error:', e.message);
+      showFeedback('Review sent — verification failed', 'watchlist');
+    }
+    doneCallback();
+  }
+
 
   // ── Deck navigation ─────────────────────────────────────────────────
 
@@ -601,6 +616,7 @@
       updateProgress();
       // Pre-fetch film details for the new card
       enrichFilmData(filmDeck[currentDeckIndex]);
+      preloadNextPosters(currentDeckIndex + 1, 10);
     } else {
       const nextUrl = currentNextPageUrl || getNextPageUrl();
       if (nextUrl) {
@@ -629,7 +645,16 @@
 
       // Update the next-page URL from the fetched document
       const nextLink = doc.querySelector('.paginate-nextprev a.next') || doc.querySelector('a[rel="next"]');
-      currentNextPageUrl = nextLink ? 'https://letterboxd.com' + nextLink.getAttribute('href') : null;
+      if (nextLink) {
+        const href = nextLink.getAttribute('href');
+        currentNextPageUrl = href.startsWith('http') ? href : 'https://letterboxd.com' + href;
+      } else if (newFilms.length > 0) {
+        // Page has films but no DOM next-link — infer from the fetched URL
+        currentNextPageUrl = inferNextPageUrlFromDoc(url);
+      } else {
+        // Empty page = real end of pagination
+        currentNextPageUrl = null;
+      }
 
       if (filtered.length > 0) {
         filmDeck.push(...filtered);
@@ -637,6 +662,7 @@
         updateDeckCard();
         updateProgress();
         enrichFilmData(filmDeck[currentDeckIndex]);
+        preloadNextPosters(currentDeckIndex + 1, 10);
         showFeedback('Loaded ' + filtered.length + ' more films', 'watchlist');
       } else if (currentNextPageUrl) {
         // All films on this page were filtered — try the next one
@@ -717,6 +743,9 @@
   }
 
   function skipCurrentFilm() {
+    if (isProcessingAction) return;
+    isProcessingAction = true;
+
     const film = filmDeck[currentDeckIndex];
     const prevIndex = currentDeckIndex;
     film.actioned = true;
@@ -737,7 +766,23 @@
       showFeedback('Undone!', 'skip');
     });
 
-    advanceToNextCard();
+    const hasNext = currentDeckIndex < filmDeck.length - 1;
+    if (hasNext) {
+      runSwipeAnimation('down');
+      currentDeckIndex++;
+      updateProgress();
+      enrichFilmData(filmDeck[currentDeckIndex]);
+      preloadNextPosters(currentDeckIndex + 1, 10);
+      setTimeout(() => {
+        populateCurrentCard(filmDeck[currentDeckIndex]);
+        populateNextCard(filmDeck[currentDeckIndex + 1]);
+        resetCardStack();
+        isProcessingAction = false;
+      }, 200);
+    } else {
+      advanceToNextCard();
+      isProcessingAction = false;
+    }
   }
 
   function showFeedback(message, type) {
@@ -751,23 +796,33 @@
     setTimeout(() => { toast.classList.remove('show'); setTimeout(() => toast.remove(), 300); }, 2000);
   }
 
+  let lastUndoCallback = null;
   function showUndoToast(message, type, undoCallback) {
     const existing = document.querySelector('.vypode-toast');
     if (existing) existing.remove();
     const toast = document.createElement('div');
     toast.className = 'vypode-toast vypode-toast-' + type + ' vypode-toast-undo';
-    toast.innerHTML = '<span>' + escapeHtml(message) + '</span><button class="vypode-undo-btn">Undo</button>';
+    toast.innerHTML = '<span>' + escapeHtml(message) + '</span><button class="vypode-undo-btn">Undo (⌘Z)</button>';
     document.body.appendChild(toast);
     let undone = false;
-    toast.querySelector('.vypode-undo-btn').addEventListener('click', () => {
+    const fire = () => {
       if (undone) return;
       undone = true;
       undoCallback();
+      lastUndoCallback = null;
       toast.classList.remove('show');
       setTimeout(() => toast.remove(), 300);
-    });
+    };
+    lastUndoCallback = fire;
+    toast.querySelector('.vypode-undo-btn').addEventListener('click', fire);
     setTimeout(() => toast.classList.add('show'), 10);
-    setTimeout(() => { if (!undone) { toast.classList.remove('show'); setTimeout(() => toast.remove(), 300); } }, 5000);
+    setTimeout(() => {
+      if (!undone) {
+        if (lastUndoCallback === fire) lastUndoCallback = null;
+        toast.classList.remove('show');
+        setTimeout(() => toast.remove(), 300);
+      }
+    }, 5000);
   }
 
   function updateProgress() {
@@ -1035,20 +1090,9 @@
   }
 
   function setRating(value) {
-    // Click same full star -> half star; click same half -> clear to below
-    if (currentRating === value) {
-      currentRating = value - 0.5;
-    } else if (currentRating === value - 0.5) {
-      currentRating = value - 1;
-    } else {
-      currentRating = value;
-    }
+    // Toggle off if clicking the same rating again
+    currentRating = (currentRating === value) ? 0 : value;
     if (currentRating < 0) currentRating = 0;
-    updateRatingDisplay();
-  }
-
-  function setHalfRating(value) {
-    currentRating = value;
     updateRatingDisplay();
   }
 
@@ -1056,23 +1100,14 @@
     const starContainer = document.getElementById('vypodeStars');
     if (!starContainer) return;
     starContainer.querySelectorAll('.vypode-star').forEach((btn, i) => {
-      const starValue = i + 1;
       btn.classList.remove('active', 'half');
-      if (currentRating >= starValue) {
-        btn.classList.add('active');
-      } else if (currentRating >= starValue - 0.5) {
-        btn.classList.add('half');
-      }
+      if (currentRating >= i + 1) btn.classList.add('active');
     });
     const ratingText = document.getElementById('vypodeRatingText');
     if (ratingText) {
-      if (currentRating > 0) {
-        const fullStars = Math.floor(currentRating);
-        const hasHalf = currentRating % 1 !== 0;
-        ratingText.textContent = '\u2605'.repeat(fullStars) + (hasHalf ? '\u00bd' : '') + ' (' + currentRating + '/5)';
-      } else {
-        ratingText.textContent = 'No rating';
-      }
+      ratingText.textContent = currentRating > 0
+        ? '\u2605'.repeat(currentRating) + ' (' + currentRating + '/5)'
+        : 'No rating';
     }
   }
 
@@ -1093,7 +1128,7 @@
           <button class="vypode-review-close" id="vypodeReviewClose">\u2715</button>
         </div>
         <div class="vypode-rating-section">
-          <label>Rating (click again for half-star, Shift+1-5 for half):</label>
+          <label>Rating (1-5 stars):</label>
           <div class="vypode-stars" id="vypodeStars">
             ${[1,2,3,4,5].map(i => `<button class="vypode-star" data-rating="${i}">\u2605</button>`).join('')}
           </div>
@@ -1113,7 +1148,7 @@
           <button class="vypode-btn vypode-btn-submit" id="vypodeReviewSubmit">Submit Review</button>
         </div>
         <div class="vypode-review-shortcuts">
-          <span><b>1-5</b> stars &bull; <b>Shift+1-5</b> half &bull; <b>Esc</b> close &bull; <b>Enter</b> submit</span>
+          <span><b>1-5</b> stars &bull; <b>Esc</b> close &bull; <b>Enter</b> submit</span>
         </div>
       </div>
     `;
@@ -1517,6 +1552,14 @@
         </div>
         ${deckControls}
         <div class="vypode-card-area">
+          ${isDeck ? `
+          <div class="vypode-card-next" id="vypodeCardNext">
+            <img class="vypode-card-bg" src="" alt="">
+            <div class="vypode-card-gradient"></div>
+            <div class="vypode-card-info">
+              <div class="vypode-card-title"></div>
+            </div>
+          </div>` : ''}
           <div class="vypode-card" id="vypodeCard">
             <img class="vypode-card-bg" src="${safePoster}" alt="${safeTitle}">
             <div class="vypode-card-gradient"></div>
@@ -1566,8 +1609,8 @@
 
     document.body.appendChild(overlay);
 
-    // Poster fallback
-    const posterImg = overlay.querySelector('.vypode-card-bg');
+    // Poster fallback (current card only)
+    const posterImg = overlay.querySelector('#vypodeCard .vypode-card-bg');
     if (posterImg) {
       posterImg.addEventListener('error', function() {
         this.src = 'https://letterboxd.com/static/img/empty-poster-230.c6baa486.png';
@@ -1577,48 +1620,104 @@
     setupEventListeners(isDeck);
     vypodeVisible = true;
     isListingPage = isDeck;
+
+    if (isDeck) {
+      populateNextCard(filmDeck[currentDeckIndex + 1]);
+      preloadNextPosters(currentDeckIndex + 1, 10);
+    }
+  }
+
+  // ── Card stack helpers ──────────────────────────────────────────────
+
+  const preloadedPosters = new Set();
+  function preloadNextPosters(startIdx, count) {
+    for (let i = 0; i < count; i++) {
+      const film = filmDeck[startIdx + i];
+      if (!film || !film.poster || preloadedPosters.has(film.poster)) continue;
+      preloadedPosters.add(film.poster);
+      const img = new Image();
+      img.src = film.poster;
+    }
+  }
+
+  function populateNextCard(film) {
+    const next = document.getElementById('vypodeCardNext');
+    if (!next) return;
+    if (!film) { next.style.visibility = 'hidden'; return; }
+    next.style.visibility = '';
+    const bg = next.querySelector('.vypode-card-bg');
+    bg.src = film.poster || '';
+    bg.alt = film.title || '';
+    const title = next.querySelector('.vypode-card-title');
+    if (title) title.textContent = film.title || '';
+  }
+
+  function populateCurrentCard(film) {
+    const card = document.getElementById('vypodeCard');
+    if (!card || !film) return;
+    const bg = card.querySelector('.vypode-card-bg');
+    bg.src = film.poster;
+    bg.alt = film.title;
+    card.querySelector('.vypode-card-title').textContent = film.title;
+    const metaEl = card.querySelector('.vypode-card-meta');
+    metaEl.innerHTML = `
+      ${film.year ? `<span>${escapeHtml(film.year)}</span>` : ''}
+      ${film.rating ? `<span>·</span><span class="vypode-rating">★ ${escapeHtml(film.rating)}</span>` : ''}
+      ${film.director ? `<span>·</span><span>${escapeHtml(film.director)}</span>` : ''}
+    `;
+    const statesEl = card.querySelector('.vypode-card-states');
+    statesEl.innerHTML = `
+      ${film.isWatched ? '<span class="vypode-state watched">✓ Watched</span>' : ''}
+      ${film.isLiked ? '<span class="vypode-state liked">Liked</span>' : ''}
+      ${film.inWatchlist ? '<span class="vypode-state watchlist">In Watchlist</span>' : ''}
+    `;
+    const prevBtn = document.getElementById('vypodePrev');
+    if (prevBtn) prevBtn.disabled = currentDeckIndex === 0;
+    const openLink = document.querySelector('.vypode-open-link');
+    if (openLink) openLink.href = film.url;
+  }
+
+  // Flyoff current + scale-up next, then DOM-swap so the next becomes current.
+  function runSwipeAnimation(direction) {
+    const card = document.getElementById('vypodeCard');
+    const next = document.getElementById('vypodeCardNext');
+    if (!card) return;
+    card.style.transition = 'transform 0.2s cubic-bezier(.2,.7,.4,1), opacity 0.2s ease';
+    if (direction === 'right') card.style.transform = 'translateX(360px) rotate(20deg)';
+    else if (direction === 'left') card.style.transform = 'translateX(-360px) rotate(-20deg)';
+    else if (direction === 'up') card.style.transform = 'translateY(-260px) scale(1.05)';
+    else if (direction === 'down') card.style.transform = 'translateY(260px) scale(0.9)';
+    card.style.opacity = '0';
+    if (next) {
+      next.style.transform = 'scale(1)';
+      next.style.opacity = '1';
+    }
+  }
+
+  function resetCardStack() {
+    const card = document.getElementById('vypodeCard');
+    const next = document.getElementById('vypodeCardNext');
+    if (!card) return;
+    card.style.transition = 'none';
+    card.style.transform = '';
+    card.style.opacity = '1';
+    resetCardVisuals(card);
+    if (next) {
+      next.style.transition = 'none';
+      next.style.transform = 'scale(0.95)';
+      next.style.opacity = '0.6';
+    }
+    // Force reflow then restore transitions for future drags
+    void card.offsetWidth;
+    card.style.transition = '';
+    if (next) next.style.transition = '';
   }
 
   function updateDeckCard() {
     if (!isListingPage || filmDeck.length === 0) return;
-
-    const film = filmDeck[currentDeckIndex];
-    const card = document.getElementById('vypodeCard');
-    const prevBtn = document.getElementById('vypodePrev');
-    const openLink = document.querySelector('.vypode-open-link');
-
-    if (!card) return;
-
-    card.style.opacity = '0';
-    card.style.transform = 'scale(0.95)';
-
-    setTimeout(() => {
-      const bgImg = card.querySelector('.vypode-card-bg');
-      bgImg.src = film.poster;
-      bgImg.alt = film.title;
-      card.querySelector('.vypode-card-title').textContent = film.title;
-
-      const metaEl = card.querySelector('.vypode-card-meta');
-      metaEl.innerHTML = `
-        ${film.year ? `<span>${escapeHtml(film.year)}</span>` : ''}
-        ${film.rating ? `<span>\u00b7</span><span class="vypode-rating">\u2605 ${escapeHtml(film.rating)}</span>` : ''}
-        ${film.director ? `<span>\u00b7</span><span>${escapeHtml(film.director)}</span>` : ''}
-      `;
-
-      const statesEl = card.querySelector('.vypode-card-states');
-      statesEl.innerHTML = `
-        ${film.isWatched ? '<span class="vypode-state watched">\u2713 Watched</span>' : ''}
-        ${film.isLiked ? '<span class="vypode-state liked">Liked</span>' : ''}
-        ${film.inWatchlist ? '<span class="vypode-state watchlist">In Watchlist</span>' : ''}
-      `;
-
-      if (prevBtn) prevBtn.disabled = currentDeckIndex === 0;
-      if (openLink) openLink.href = film.url;
-
-      card.style.opacity = '1';
-      card.style.transform = '';
-    }, 150);
-
+    populateCurrentCard(filmDeck[currentDeckIndex]);
+    populateNextCard(filmDeck[currentDeckIndex + 1]);
+    resetCardStack();
     updateProgress();
   }
 
@@ -1673,10 +1772,11 @@
       const touch = e.touches[0];
       const dx = touch.clientX - touchStartX;
       const dy = touch.clientY - touchStartY;
+
+      // Clear overlays first (resetCardVisuals also wipes transform), then set drag pos
+      resetCardVisuals(card);
       card.style.transform = 'translate(' + dx + 'px, ' + dy + 'px) rotate(' + (dx * 0.05) + 'deg)';
 
-      // Show zone overlays based on dominant direction
-      resetCardVisuals(card);
       const absDx = Math.abs(dx), absDy = Math.abs(dy);
       if (absDx > 30 || absDy > 30) {
         if (absDx > absDy) {
@@ -1697,31 +1797,29 @@
       const dist = Math.sqrt(dx * dx + dy * dy);
       const velocity = dist / Math.max(elapsed, 1);
 
-      card.style.transition = 'transform 0.3s ease';
-      card.style.transform = '';
-      resetCardVisuals(card);
-
       // Trigger if displacement > 80px or fast flick > 0.5px/ms
       const triggered = dist > 80 || (velocity > 0.5 && dist > 30);
       if (triggered && !isProcessingAction) {
         const angle = Math.atan2(dy, dx) * 180 / Math.PI;
         if (angle > 135 || angle < -135) {
-          // Left = watched
-          animateAction('left');
-          setTimeout(() => { isDeck ? performBackgroundAction(filmDeck[currentDeckIndex].url, 'watch') : performWatch(); }, 300);
+          isDeck ? performBackgroundAction(filmDeck[currentDeckIndex].url, 'watch') : (animateAction('left'), performWatch());
         } else if (angle > -45 && angle < 45) {
-          // Right = watchlist
-          animateAction('right');
-          setTimeout(() => { isDeck ? performBackgroundAction(filmDeck[currentDeckIndex].url, 'watchlist') : performWatchlist(); }, 300);
+          isDeck ? performBackgroundAction(filmDeck[currentDeckIndex].url, 'watchlist') : (animateAction('right'), performWatchlist());
         } else if (angle < -45 && angle >= -135) {
-          // Up = like
-          animateAction('up');
-          setTimeout(() => { isDeck ? performBackgroundAction(filmDeck[currentDeckIndex].url, 'like') : performLike(); }, 300);
+          isDeck ? performBackgroundAction(filmDeck[currentDeckIndex].url, 'like') : (animateAction('up'), performLike());
         } else if (angle > 45 && angle <= 135 && isDeck) {
-          // Down = skip
-          animateAction('down');
-          setTimeout(() => skipCurrentFilm(), 300);
+          skipCurrentFilm();
+        } else {
+          // Direction unclear — snap back
+          card.style.transition = 'transform 0.2s cubic-bezier(.2,.7,.4,1)';
+          card.style.transform = '';
+          resetCardVisuals(card);
         }
+      } else {
+        // No trigger — snap back to center
+        card.style.transition = 'transform 0.2s cubic-bezier(.2,.7,.4,1)';
+        card.style.transform = '';
+        resetCardVisuals(card);
       }
     });
 
@@ -1745,20 +1843,16 @@
       if (isProcessingAction) return;
 
       if (currentZone === 'left') {
-        animateAction('left');
-        setTimeout(() => { isDeck ? performBackgroundAction(filmDeck[currentDeckIndex].url, 'watch') : performWatch(); }, 300);
+        isDeck ? performBackgroundAction(filmDeck[currentDeckIndex].url, 'watch') : (animateAction('left'), performWatch());
       }
       else if (currentZone === 'right') {
-        animateAction('right');
-        setTimeout(() => { isDeck ? performBackgroundAction(filmDeck[currentDeckIndex].url, 'watchlist') : performWatchlist(); }, 300);
+        isDeck ? performBackgroundAction(filmDeck[currentDeckIndex].url, 'watchlist') : (animateAction('right'), performWatchlist());
       }
       else if (currentZone === 'up') {
-        animateAction('up');
-        setTimeout(() => { isDeck ? performBackgroundAction(filmDeck[currentDeckIndex].url, 'like') : performLike(); }, 300);
+        isDeck ? performBackgroundAction(filmDeck[currentDeckIndex].url, 'like') : (animateAction('up'), performLike());
       }
       else if (currentZone === 'down' && isDeck) {
-        animateAction('down');
-        setTimeout(() => skipCurrentFilm(), 300);
+        skipCurrentFilm();
       }
     });
 
@@ -1769,15 +1863,22 @@
   function handleKeyDown(e) {
     if (!vypodeVisible) return;
 
+    // Cmd/Ctrl+Z — undo last action (any time, even with no toast visible)
+    if ((e.metaKey || e.ctrlKey) && (e.key === 'z' || e.key === 'Z') && !e.shiftKey && !isUserTyping()) {
+      e.preventDefault();
+      if (lastUndoCallback) {
+        lastUndoCallback();
+      } else if (isListingPage && currentDeckIndex > 0) {
+        goToPrevCard();
+      }
+      return;
+    }
+
     // Review panel shortcuts
     if (reviewPanelVisible) {
       if (e.key >= '1' && e.key <= '5' && !isUserTyping()) {
         e.preventDefault();
-        if (e.shiftKey) {
-          setHalfRating(parseInt(e.key) - 0.5);
-        } else {
-          setRating(parseInt(e.key));
-        }
+        setRating(parseInt(e.key));
       } else if (e.key === 'Enter' && !e.shiftKey && !isUserTyping()) {
         e.preventDefault();
         document.getElementById('vypodeReviewSubmit')?.click();
@@ -1817,32 +1918,25 @@
       e.preventDefault();
       showReviewPanel();
       const val = parseInt(e.key);
-      setTimeout(() => {
-        if (e.shiftKey) setHalfRating(val - 0.5);
-        else setRating(val);
-      }, 100);
+      setTimeout(() => setRating(val), 100);
       return;
     }
 
     if (e.key === 'ArrowLeft') {
       e.preventDefault();
-      animateAction('left');
-      setTimeout(() => { isListingPage ? performBackgroundAction(filmDeck[currentDeckIndex].url, 'watch') : performWatch(); }, 300);
+      isListingPage ? performBackgroundAction(filmDeck[currentDeckIndex].url, 'watch') : (animateAction('left'), performWatch());
     }
     else if (e.key === 'ArrowRight') {
       e.preventDefault();
-      animateAction('right');
-      setTimeout(() => { isListingPage ? performBackgroundAction(filmDeck[currentDeckIndex].url, 'watchlist') : performWatchlist(); }, 300);
+      isListingPage ? performBackgroundAction(filmDeck[currentDeckIndex].url, 'watchlist') : (animateAction('right'), performWatchlist());
     }
     else if (e.key === 'ArrowUp') {
       e.preventDefault();
-      animateAction('up');
-      setTimeout(() => { isListingPage ? performBackgroundAction(filmDeck[currentDeckIndex].url, 'like') : performLike(); }, 300);
+      isListingPage ? performBackgroundAction(filmDeck[currentDeckIndex].url, 'like') : (animateAction('up'), performLike());
     }
     else if (e.key === 'ArrowDown' && isListingPage) {
       e.preventDefault();
-      animateAction('down');
-      setTimeout(() => skipCurrentFilm(), 300);
+      skipCurrentFilm();
     }
     else if (e.key === 'Escape') hideVypode();
   }
@@ -1892,18 +1986,18 @@
   function animateAction(direction) {
     const card = document.getElementById('vypodeCard');
     if (!card) return;
-    card.style.transition = 'transform 0.4s ease, opacity 0.4s ease';
+    card.style.transition = 'transform 0.2s cubic-bezier(.2,.7,.4,1), opacity 0.2s ease';
     if (direction === 'right') card.style.transform = 'translateX(300px) rotate(20deg)';
     else if (direction === 'left') card.style.transform = 'translateX(-300px) rotate(-20deg)';
     else if (direction === 'up') card.style.transform = 'translateY(-200px) scale(1.1)';
     else if (direction === 'down') card.style.transform = 'translateY(200px) scale(0.9)';
     card.style.opacity = '0.5';
     setTimeout(() => {
-      card.style.transition = 'transform 0.3s ease, opacity 0.3s ease';
+      card.style.transition = 'transform 0.2s cubic-bezier(.2,.7,.4,1), opacity 0.2s ease';
       card.style.transform = '';
       card.style.opacity = '1';
-      if (!isListingPage) setTimeout(refreshStates, 500);
-    }, 400);
+      if (!isListingPage) setTimeout(refreshStates, 200);
+    }, 200);
   }
 
   function refreshStates() {
@@ -1950,7 +2044,27 @@
     document.body.appendChild(btn);
   }
 
+  // Inject the main-world capture shim so we can see the exact request
+  // Letterboxd's own review/diary modal sends. Logs to console only.
+  function installCaptureShim() {
+    try {
+      const s = document.createElement('script');
+      s.src = chrome.runtime.getURL('inject-capture.js');
+      s.onload = () => s.remove();
+      (document.head || document.documentElement).appendChild(s);
+      window.addEventListener('message', (e) => {
+        if (e.source !== window || !e.data || !e.data.__vypodeCapture) return;
+        vyLog('CAPTURE', e.data.method, e.data.url, '\n  body:', e.data.body);
+      });
+      vyLog('capture shim installed — log a film normally on a film page to capture the real request');
+    } catch (e) {
+      vyWarn('capture shim failed:', e.message);
+    }
+  }
+
   async function init() {
+    installCaptureShim();
+
     // Initialize FilmState registry
     if (window.VypodeFilmState) {
       await window.VypodeFilmState.init();

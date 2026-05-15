@@ -28,6 +28,12 @@
       "run_at": "document_idle"
     }
   ],
+  "web_accessible_resources": [
+    {
+      "resources": ["inject-capture.js"],
+      "matches": ["https://letterboxd.com/*"]
+    }
+  ],
   "action": {
     "default_popup": "popup.html",
     "default_title": "Vypode for Letterboxd"
