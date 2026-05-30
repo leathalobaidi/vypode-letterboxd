@@ -935,19 +935,162 @@
 .vypode-stat-liked { color: #ff4b4b; }
 .vypode-stat-watchlist { color: #00c853; }
 .vypode-stat-skipped { color: #6496ff; }
+.vypode-stat-rated { color: #ffcc00; }
+.vypode-stat-reviewed { color: #c9a2ff; }
 
-/* ── Cloud Status ──────────────────────────────────────────────────── */
+/* ── Profile Database ──────────────────────────────────────────────── */
 
-.vypode-cloud-status {
-  color: rgba(255, 255, 255, 0.5);
-  font-size: 13px;
-  margin-bottom: 12px;
+.vypode-db-controls {
+  display: grid;
+  grid-template-columns: 1fr 130px 140px;
+  gap: 8px;
+  margin-bottom: 10px;
 }
 
-.vypode-cloud-actions {
+.vypode-db-controls input,
+.vypode-db-controls select {
+  min-width: 0;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  color: white;
+  border-radius: 8px;
+  padding: 8px 10px;
+  font: inherit;
+  font-size: 12px;
+}
+
+.vypode-db-controls option { color: #111; }
+
+.vypode-db-summary {
+  color: rgba(255, 255, 255, 0.5);
+  font-size: 12px;
+  margin-bottom: 8px;
+}
+
+.vypode-db-list {
+  max-height: 300px;
+  overflow: auto;
+  display: grid;
+  gap: 6px;
+}
+
+.vypode-db-row {
+  display: grid;
+  grid-template-columns: 42px 1fr;
+  gap: 10px;
+  width: 100%;
+  padding: 6px;
+  text-align: left;
+  background: rgba(255, 255, 255, 0.055);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+  color: white;
+  cursor: pointer;
+}
+
+.vypode-db-row:hover {
+  border-color: rgba(247, 147, 30, 0.55);
+  background: rgba(255, 255, 255, 0.09);
+}
+
+.vypode-db-row img,
+.vypode-db-poster-empty {
+  width: 42px;
+  height: 63px;
+  border-radius: 4px;
+  object-fit: cover;
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.vypode-db-main {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.vypode-db-main strong {
+  font-size: 13px;
+  line-height: 1.2;
+}
+
+.vypode-db-main strong span,
+.vypode-db-main small {
+  color: rgba(255, 255, 255, 0.55);
+}
+
+.vypode-db-badges {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
+  gap: 4px;
+}
+
+.vypode-db-badges span {
+  background: rgba(247, 147, 30, 0.16);
+  color: #ffcc80;
+  border-radius: 999px;
+  padding: 2px 6px;
+  font-size: 10px;
+}
+
+.vypode-db-detail {
+  position: fixed;
+  inset: 0;
+  z-index: 1000001;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.72);
+  padding: 20px;
+}
+
+.vypode-db-detail-body {
+  width: min(680px, 92vw);
+  max-height: 80vh;
+  overflow: auto;
+  display: grid;
+  grid-template-columns: 120px 1fr;
+  gap: 18px;
+  background: #14181c;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  padding: 18px;
+  color: white;
+}
+
+.vypode-db-detail-body img {
+  width: 120px;
+  border-radius: 6px;
+}
+
+.vypode-db-detail-body h4 {
+  margin: 0 0 10px;
+  font-size: 20px;
+}
+
+.vypode-db-detail-body h4 span,
+.vypode-db-detail-body p {
+  color: rgba(255, 255, 255, 0.65);
+}
+
+.vypode-db-detail-body blockquote {
+  margin: 12px 0;
+  padding-left: 12px;
+  border-left: 3px solid #f7931e;
+  color: rgba(255, 255, 255, 0.84);
+}
+
+.vypode-db-detail-close {
+  position: fixed;
+  top: 24px;
+  right: 24px;
+  width: 36px;
+  height: 36px;
+  border: none;
+  border-radius: 50%;
+  color: white;
+  background: rgba(255, 255, 255, 0.14);
+  cursor: pointer;
 }
 
 /* ── Settings Buttons ──────────────────────────────────────────────── */
@@ -1001,4 +1144,23 @@
   color: rgba(255, 255, 255, 0.2);
   font-size: 11px;
   margin-top: 10px;
+}
+
+@media (max-width: 520px) {
+  .vypode-settings-content {
+    width: calc(100% - 24px);
+    padding: 20px;
+  }
+
+  .vypode-stats-grid {
+    grid-template-columns: repeat(3, 1fr);
+  }
+
+  .vypode-db-controls {
+    grid-template-columns: 1fr;
+  }
+
+  .vypode-db-detail-body {
+    grid-template-columns: 1fr;
+  }
 }

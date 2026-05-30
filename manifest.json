@@ -2,11 +2,9 @@
   "manifest_version": 3,
   "name": "Vypode for Letterboxd",
   "version": "5.0.0",
-  "description": "Swipe-style interface for quickly rating and adding films on Letterboxd — with smart filtering, collection sync, and cloud backup",
+  "description": "Swipe-style interface and local profile database for filtering, searching, and reviewing your Letterboxd history",
   "permissions": [
-    "storage",
-    "identity",
-    "alarms"
+    "storage"
   ],
   "host_permissions": [
     "https://letterboxd.com/*"
@@ -28,12 +26,6 @@
       "run_at": "document_idle"
     }
   ],
-  "web_accessible_resources": [
-    {
-      "resources": ["inject-capture.js"],
-      "matches": ["https://letterboxd.com/*"]
-    }
-  ],
   "action": {
     "default_popup": "popup.html",
     "default_title": "Vypode for Letterboxd"
@@ -42,9 +34,5 @@
     "16": "icons/icon16.png",
     "48": "icons/icon48.png",
     "128": "icons/icon128.png"
-  },
-  "oauth2": {
-    "client_id": "YOUR_GOOGLE_CLIENT_ID.apps.googleusercontent.com",
-    "scopes": ["openid", "email", "profile"]
   }
 }

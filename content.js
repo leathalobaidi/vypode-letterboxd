@@ -1,7 +1,7 @@
 // VYPODE FOR LETTERBOXD — Content Script v5.0.0
 // Background actions + auto-advance + auto-next-page + Voice Review + Star Rating
 // v5.0.0: FilmState registry, fresh poster filtering, durable skip,
-//         account awareness, collection sync, settings panel, cloud sync
+//         account awareness, collection sync, settings panel, local profile database
 (function() {
   'use strict';
   if (window.vypodeInjected) return;
@@ -53,6 +53,68 @@
   function escapeHtml(str) {
     if (!str) return '';
     return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#039;');
+  }
+
+  function absoluteLetterboxdUrl(path) {
+    if (!path) return '';
+    return path.startsWith('http') ? path : 'https://letterboxd.com' + path;
+  }
+
+  function normalizePosterUrl(url, srcset) {
+    let posterUrl = url || '';
+    if ((!posterUrl || posterUrl.includes('empty-poster')) && srcset) {
+      posterUrl = srcset.split(',')[0]?.trim()?.split(' ')[0] || posterUrl;
+    }
+    if (!posterUrl) return '';
+    return posterUrl
+      .replace(/-0-\d+-0-\d+-crop/, '-0-460-0-690-crop')
+      .replace(/-\d+-\d+-\d+-\d+-crop/, '-0-460-0-690-crop');
+  }
+
+  function titleWithoutPosterPrefix(value, fallback) {
+    return (value || fallback || 'Unknown Film').replace(/^Poster for /i, '').trim();
+  }
+
+  function parseYearFromTitle(title) {
+    const match = String(title || '').match(/\((\d{4})\)\s*$/);
+    return match ? match[1] : '';
+  }
+
+  function parseRatingValue(ratingEl) {
+    if (!ratingEl) return null;
+    const classRating = String(ratingEl.className || '').match(/rated-(\d+)/);
+    if (classRating) return Number(classRating[1]) / 2;
+    const text = ratingEl.textContent || '';
+    let total = 0;
+    for (const char of text) {
+      if (char === '★') total += 1;
+      if (char === '½') total += 0.5;
+    }
+    return total || null;
+  }
+
+  function persistFilmRecord(film, source) {
+    if (!film?.slug || !window.VypodeFilmState?.updateFilm) return;
+    const patch = {};
+    const metadata = {
+      title: film.title,
+      year: film.year || parseYearFromTitle(film.title),
+      poster: film.poster,
+      url: film.url,
+      rating: film.rating,
+      ratingValue: film.ratingValue,
+      reviewText: film.reviewText,
+      reviewUrl: film.reviewUrl
+    };
+    for (const key in metadata) {
+      if (metadata[key] !== undefined && metadata[key] !== null && metadata[key] !== '') {
+        patch[key] = metadata[key];
+      }
+    }
+    if (film.isWatched || film.watched) patch.watched = true;
+    if (film.isLiked || film.liked) patch.liked = true;
+    if (film.inWatchlist || film.watchlist) patch.watchlist = true;
+    window.VypodeFilmState.updateFilm(film.slug, patch, source || 'domSync');
   }
 
   // ── Account detection ───────────────────────────────────────────────
@@ -131,8 +193,9 @@
     return {
       title: titleEl?.textContent?.trim() || 'Unknown Film',
       year: yearEl?.textContent?.trim() || '',
-      poster: posterEl?.src || '',
+      poster: normalizePosterUrl(posterEl?.src, posterEl?.srcset),
       rating: ratingEl?.textContent?.trim() || '',
+      ratingValue: null,
       director: directorEl?.textContent?.trim() || '',
       genres: Array.from(genreEls).slice(0, 3).map(el => el.textContent.trim()),
       url: window.location.href,
@@ -158,20 +221,16 @@
         if (!filmSlug || seen.has(filmSlug)) return;
         seen.add(filmSlug);
 
-        let title = img.alt || container.getAttribute('data-film-name') || filmSlug?.replace(/-/g, ' ') || 'Unknown';
-        title = title.replace(/^Poster for /i, '');
+        let title = titleWithoutPosterPrefix(
+          img.alt || container.getAttribute('data-film-name'),
+          filmSlug?.replace(/-/g, ' ')
+        );
 
-        let posterUrl = img.src || img.dataset.src || '';
-        if (posterUrl.includes('empty-poster') || !posterUrl) {
-          posterUrl = img.srcset?.split(',')[0]?.trim()?.split(' ')[0] || '';
-        }
-        if (posterUrl) {
-          posterUrl = posterUrl.replace(/-0-\d+-0-\d+-crop/, '-0-460-0-690-crop')
-                               .replace(/-\d+-\d+-\d+-\d+-crop/, '-0-460-0-690-crop');
-        }
+        const posterUrl = normalizePosterUrl(img.src || img.dataset.src, img.srcset);
 
         const ratingEl = filmPoster.querySelector('.rating') || filmPoster.querySelector('[class*="rating"]');
         const rating = ratingEl?.textContent?.trim() || '';
+        const ratingValue = parseRatingValue(ratingEl);
 
         const overlay = filmPoster.querySelector('.film-poster-overlay, .overlay');
         const isWatched = overlay?.querySelector('.icon-watched.-on, .action.-watched.-checked') !== null;
@@ -185,20 +244,23 @@
           if (inWatchlist) window.VypodeFilmState.setFlag(filmSlug, 'watchlist', true, 'domSync');
         }
 
-        films.push({
+        const film = {
           title: title.charAt(0).toUpperCase() + title.slice(1),
-          year: '',
+          year: parseYearFromTitle(title),
           poster: posterUrl,
           rating: rating,
+          ratingValue,
           director: '',
           genres: [],
-          url: 'https://letterboxd.com' + href,
+          url: absoluteLetterboxdUrl(href),
           slug: filmSlug,
           isWatched,
           isLiked,
           inWatchlist,
           actioned: false
-        });
+        };
+        persistFilmRecord(film, 'domSync');
+        films.push(film);
       }
     });
 
@@ -353,6 +415,7 @@
     const prevIndex = currentDeckIndex;
     const flagMap = { watch: 'watched', like: 'liked', watchlist: 'watchlist' };
     const dirMap = { watch: 'left', like: 'up', watchlist: 'right' };
+    const previousValue = action === 'watch' ? film.isWatched : action === 'like' ? film.isLiked : film.inWatchlist;
 
     // Optimistic update — mark film and persist immediately so the user
     // can keep swiping without waiting for Letterboxd to respond.
@@ -388,7 +451,7 @@
     });
 
     // Queue the actual Letterboxd action (non-blocking)
-    actionQueue.push({ filmUrl, action, retries: 0 });
+    actionQueue.push({ filmUrl, action, retries: 0, slug: film.slug, previousValue });
     processActionQueue();
 
     // Visual flyoff + next-card rise, parallel with action queue
@@ -427,12 +490,14 @@
       // Retry up to 3 times with increasing delay
       if (retries < 3) {
         setTimeout(() => {
-          actionQueue.push({ filmUrl, action, retries: retries + 1 });
+          actionQueue.push({ ...item, retries: retries + 1 });
           isProcessingQueue = false;
           processActionQueue();
         }, (retries + 1) * 1000);
       } else {
         console.warn('Vypode: action failed after 3 retries', action, filmUrl);
+        rollbackFailedAction(item);
+        showFeedback('Letterboxd action failed; local change rolled back', 'error');
         isProcessingQueue = false;
         processActionQueue();
       }
@@ -475,6 +540,21 @@
     };
 
     iframe.src = filmUrl;
+  }
+
+  function rollbackFailedAction(item) {
+    const flagMap = { watch: 'watched', like: 'liked', watchlist: 'watchlist' };
+    const flag = flagMap[item.action];
+    if (!flag || !item.slug) return;
+
+    const film = filmDeck.find(f => f.slug === item.slug);
+    if (film) {
+      if (flag === 'watched') film.isWatched = item.previousValue;
+      else if (flag === 'liked') film.isLiked = item.previousValue;
+      else if (flag === 'watchlist') film.inWatchlist = item.previousValue;
+    }
+    window.VypodeFilmState?.setFlag(item.slug, flag, Boolean(item.previousValue), 'userAction');
+    updateDeckCard();
   }
 
   // ── Review submission ───────────────────────────────────────────────
@@ -558,6 +638,14 @@
 
       // 4. Verify by checking diary
       await verifyReviewSubmitted(filmSlug, rating, () => {
+        window.VypodeFilmState?.updateFilm?.(filmSlug, {
+          ratingValue: rating || null,
+          rating: rating > 0 ? '★'.repeat(rating) : null,
+          reviewText: fullReview || null,
+          watched: true,
+          watchedAt: new Date().toISOString(),
+          url: canonicalUrl
+        }, 'userAction');
         hideReviewPanel();
         if (isListingPage) {
           filmDeck[currentDeckIndex].actioned = true;
@@ -700,33 +788,31 @@
         // Also skip if already in the current deck
         if (filmDeck.some(f => f.slug === filmSlug)) return;
 
-        let title = img.alt || container.getAttribute('data-film-name') || filmSlug?.replace(/-/g, ' ') || 'Unknown';
-        title = title.replace(/^Poster for /i, '');
-
-        let posterUrl = img.src || img.dataset.src || '';
-        if (posterUrl.includes('empty-poster') || !posterUrl) {
-          posterUrl = img.srcset?.split(',')[0]?.trim()?.split(' ')[0] || '';
-        }
-        if (posterUrl) {
-          posterUrl = posterUrl.replace(/-0-\d+-0-\d+-crop/, '-0-460-0-690-crop')
-                               .replace(/-\d+-\d+-\d+-\d+-crop/, '-0-460-0-690-crop');
-        }
+        let title = titleWithoutPosterPrefix(
+          img.alt || container.getAttribute('data-film-name'),
+          filmSlug?.replace(/-/g, ' ')
+        );
+        const posterUrl = normalizePosterUrl(img.src || img.dataset.src, img.srcset);
 
         const ratingEl = filmPoster.querySelector('.rating') || filmPoster.querySelector('[class*="rating"]');
         const overlay = filmPoster.querySelector('.film-poster-overlay, .overlay');
 
-        films.push({
+        const film = {
           title: title.charAt(0).toUpperCase() + title.slice(1),
-          year: '', poster: posterUrl,
+          year: parseYearFromTitle(title),
+          poster: posterUrl,
           rating: ratingEl?.textContent?.trim() || '',
+          ratingValue: parseRatingValue(ratingEl),
           director: '', genres: [],
-          url: 'https://letterboxd.com' + href,
+          url: absoluteLetterboxdUrl(href),
           slug: filmSlug,
           isWatched: overlay?.querySelector('.icon-watched.-on, .action.-watched.-checked') !== null,
           isLiked: overlay?.querySelector('.icon-like.-on, .action.-like.-checked') !== null,
           inWatchlist: overlay?.querySelector('.icon-watchlist.-on, .action.-watchlist.-checked') !== null,
           actioned: false
-        });
+        };
+        persistFilmRecord(film, 'domSync');
+        films.push(film);
       }
     });
 
@@ -850,49 +936,45 @@
     const startTime = Date.now();
 
     try {
-      const results = { watched: 0, watchlist: 0, liked: 0 };
+      const results = { watched: 0, watchlist: 0, liked: 0, reviewed: 0 };
 
-      // Fetch all three collections in parallel (~3x faster)
-      const [watchedSlugs, watchlistSlugs, likedSlugs] = await Promise.all([
-        fetchAllFilmSlugs(`/${letterboxdUsername}/films/`),
-        fetchAllFilmSlugs(`/${letterboxdUsername}/watchlist/`),
-        fetchAllFilmSlugs(`/${letterboxdUsername}/likes/films/`)
+      const [watchedFilms, watchlistFilms, likedFilms] = await Promise.all([
+        fetchAllCollectionFilms(`/${letterboxdUsername}/films/`, { watched: true }),
+        fetchAllCollectionFilms(`/${letterboxdUsername}/watchlist/`, { watchlist: true }),
+        fetchAllCollectionFilms(`/${letterboxdUsername}/likes/films/`, { liked: true })
       ]);
-      results.watched = watchedSlugs.length;
-      results.watchlist = watchlistSlugs.length;
-      results.liked = likedSlugs.length;
+      results.watched = watchedFilms.length;
+      results.watchlist = watchlistFilms.length;
+      results.liked = likedFilms.length;
 
-      // Build bulk update map
+      const syncStatus = document.getElementById('vypodeSyncStatus');
+      if (syncStatus) syncStatus.textContent = 'Loading review text where available...';
+      await hydrateReviewText(watchedFilms);
+      results.reviewed = watchedFilms.filter(film => film.reviewText).length;
+
       const slugMap = {};
-      for (const slug of watchedSlugs) {
-        if (!slugMap[slug]) slugMap[slug] = {};
-        slugMap[slug].watched = true;
-      }
-      for (const slug of watchlistSlugs) {
-        if (!slugMap[slug]) slugMap[slug] = {};
-        slugMap[slug].watchlist = true;
-      }
-      for (const slug of likedSlugs) {
-        if (!slugMap[slug]) slugMap[slug] = {};
-        slugMap[slug].liked = true;
+      for (const film of [...watchedFilms, ...watchlistFilms, ...likedFilms]) {
+        if (!film.slug) continue;
+        slugMap[film.slug] = mergeSyncedFilmRecord(slugMap[film.slug], film);
       }
 
-      // Apply to local registry
       const updated = window.VypodeFilmState.bulkSetFromSync(slugMap, 'collectionSync');
+      const reconciled = window.VypodeFilmState.reconcileFlags?.({
+        watched: new Set(watchedFilms.map(film => film.slug)),
+        liked: new Set(likedFilms.map(film => film.slug)),
+        watchlist: new Set(watchlistFilms.map(film => film.slug))
+      }, 'collectionSync') || 0;
 
       const duration = Date.now() - startTime;
       window.VypodeFilmState.setSyncMeta(new Date().toISOString(), duration, results);
 
       isSyncing = false;
       updateSyncUI('done');
+      refreshSettingsStats();
+      renderDatabaseBrowser();
       showFeedback(`Sync complete: ${results.watched} watched, ${results.watchlist} watchlist, ${results.liked} liked`, 'watchlist');
 
-      // Push to cloud if signed in
-      try {
-        chrome.runtime.sendMessage({ type: 'vypode', action: 'cloudPush' });
-      } catch (e) { /* background may not be ready */ }
-
-      return { success: true, results, updated, duration };
+      return { success: true, results, updated, reconciled, duration };
 
     } catch (e) {
       isSyncing = false;
@@ -902,44 +984,34 @@
     }
   }
 
-  // Fetch all film slugs from paginated Letterboxd pages
-  async function fetchAllFilmSlugs(basePath) {
-    const slugs = new Set();
+  async function fetchAllCollectionFilms(basePath, flags) {
+    const films = new Map();
     let page = 1;
     const maxPages = 100; // Safety cap: 100 pages x 72 films = 7,200 films max
 
     while (page <= maxPages) {
       const url = `https://letterboxd.com${basePath}page/${page}/`;
 
-      // Rate limit: 1 request per second
-      if (page > 1) await sleep(1000);
+      if (page > 1) await sleep(150);
 
       try {
-        const response = await fetch(url, { credentials: 'same-origin' });
+        const response = await fetchWithTimeout(url, { credentials: 'same-origin' }, 15000);
         if (!response.ok) break;
 
         const html = await response.text();
         const doc = new DOMParser().parseFromString(html, 'text/html');
 
-        // Extract film slugs from poster links
-        const links = doc.querySelectorAll('a[href*="/film/"]');
+        const pageFilms = extractProfileFilms(doc, flags);
         let foundOnPage = 0;
-
-        for (const link of links) {
-          const match = link.getAttribute('href')?.match(/\/film\/([^\/]+)/);
-          if (match && match[1]) {
-            const slug = match[1];
-            if (!slugs.has(slug)) {
-              slugs.add(slug);
-              foundOnPage++;
-            }
-          }
+        for (const film of pageFilms) {
+          if (!film.slug) continue;
+          const existing = films.get(film.slug) || {};
+          films.set(film.slug, { ...existing, ...film });
+          foundOnPage++;
         }
 
-        // Stop condition: no films found (empty page = past the end)
         if (foundOnPage === 0) break;
 
-        // Stop condition: no next page link
         const hasNext = doc.querySelector('.paginate-nextprev a.next') ||
                         doc.querySelector('a[rel="next"]');
         if (!hasNext) break;
@@ -951,7 +1023,102 @@
       }
     }
 
-    return Array.from(slugs);
+    return Array.from(films.values());
+  }
+
+  function mergeSyncedFilmRecord(existing, incoming) {
+    const merged = { ...(existing || {}) };
+    for (const key of ['slug', 'title', 'year', 'poster', 'url', 'rating', 'ratingValue', 'reviewText', 'reviewUrl']) {
+      if (incoming[key] !== undefined && incoming[key] !== null && incoming[key] !== '') {
+        merged[key] = incoming[key];
+      }
+    }
+    for (const flag of ['watched', 'liked', 'watchlist']) {
+      merged[flag] = Boolean(merged[flag] || incoming[flag]);
+    }
+    return merged;
+  }
+
+  function extractProfileFilms(doc, flags) {
+    const films = [];
+    const items = doc.querySelectorAll('.griditem, li.poster-container, li.posteritem');
+    const containers = items.length ? items : doc.querySelectorAll('[data-item-slug]');
+
+    containers.forEach(item => {
+      const component = item.querySelector('[data-item-slug]') || item.closest('[data-item-slug]') || item;
+      const link = item.querySelector('a[href*="/film/"]') || component.querySelector?.('a[href*="/film/"]');
+      const img = item.querySelector('img');
+      const href = component.dataset?.itemLink || link?.getAttribute('href') || '';
+      const slug = component.dataset?.itemSlug || href.match(/\/film\/([^\/]+)/)?.[1];
+      if (!slug) return;
+
+      const title = titleWithoutPosterPrefix(
+        component.dataset?.itemName || component.dataset?.itemFullDisplayName || img?.alt,
+        slug.replace(/-/g, ' ')
+      );
+      const ratingEl = item.querySelector('.poster-viewingdata .rating[class*="rated-"], .rating[class*="rated-"]');
+      const reviewLink = item.querySelector('a.review-micro[href*="/film/"], a.icon-review[href*="/film/"]');
+
+      const film = {
+        slug,
+        title,
+        year: parseYearFromTitle(title),
+        poster: normalizePosterUrl(img?.src || img?.dataset?.src, img?.srcset),
+        url: absoluteLetterboxdUrl(href || `/film/${slug}/`),
+        rating: ratingEl?.textContent?.trim() || null,
+        ratingValue: parseRatingValue(ratingEl),
+        reviewUrl: reviewLink ? absoluteLetterboxdUrl(reviewLink.getAttribute('href')) : null
+      };
+      if (flags?.watched) film.watched = true;
+      if (flags?.liked) film.liked = true;
+      if (flags?.watchlist) film.watchlist = true;
+      films.push(film);
+    });
+
+    return films;
+  }
+
+  async function hydrateReviewText(films) {
+    const queue = films.filter(film => film.reviewUrl && !film.reviewText);
+    const syncStatus = document.getElementById('vypodeSyncStatus');
+    let completed = 0;
+    if (syncStatus && queue.length > 0) {
+      syncStatus.textContent = `Loading review text where available... 0/${queue.length}`;
+    }
+    let index = 0;
+    const workers = Array.from({ length: Math.min(4, queue.length) }, async () => {
+      while (index < queue.length) {
+        const film = queue[index++];
+        try {
+          const response = await fetchWithTimeout(film.reviewUrl, { credentials: 'same-origin', cache: 'no-store' }, 12000);
+          if (!response.ok) continue;
+          const html = await response.text();
+          const doc = new DOMParser().parseFromString(html, 'text/html');
+          const body = doc.querySelector('.js-review-body, .review .body-text, .body-text.-prose');
+          if (body) {
+            film.reviewText = body.textContent.replace(/\s+/g, ' ').trim();
+          }
+        } catch (e) {
+          // Review text is additive metadata. Missing text should never fail the whole sync.
+        } finally {
+          completed++;
+          if (syncStatus && (completed === queue.length || completed % 25 === 0)) {
+            syncStatus.textContent = `Loading review text where available... ${completed}/${queue.length}`;
+          }
+        }
+      }
+    });
+    await Promise.all(workers);
+  }
+
+  async function fetchWithTimeout(url, options, timeoutMs) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      return await fetch(url, { ...(options || {}), signal: controller.signal });
+    } finally {
+      clearTimeout(timeout);
+    }
   }
 
   function sleep(ms) {
@@ -990,16 +1157,6 @@
     const days = Math.floor(hours / 24);
     return `${days}d ago`;
   }
-
-  // ── Listen for background messages ──────────────────────────────────
-
-  chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
-    if (msg.type !== 'vypode') return;
-    if (msg.action === 'triggerSync') {
-      // Background alarm triggered a sync
-      runCollectionSync();
-    }
-  });
 
   // ==================== REVIEW PANEL ====================
 
@@ -1136,6 +1293,7 @@
         </div>
         <div class="vypode-review-section">
           <label>Your review:</label>
+          <div class="vypode-review-notice">Submitting creates a Letterboxd diary entry for today using this rating and review text.</div>
           <div class="vypode-dictate-row">
             <button class="vypode-mic-btn" id="vypodeMicBtn">Dictate</button>
             <span class="vypode-mic-hint">or just type below</span>
@@ -1229,10 +1387,10 @@
             <span id="vypodeSyncStatus" class="vypode-sync-status">Last sync: ${escapeHtml(lastSync)}</span>
             <button class="vypode-sync-btn" id="vypodeSyncBtn" ${!safeUsername ? 'disabled' : ''}>Sync now</button>
           </div>
-          ${meta.syncCounts ? `<div class="vypode-sync-counts">
+          ${meta.syncCounts ? `<div class="vypode-sync-counts" id="vypodeSyncCounts">
             ${meta.syncCounts.watched || 0} watched &bull; ${meta.syncCounts.watchlist || 0} watchlist &bull; ${meta.syncCounts.liked || 0} liked
           </div>` : ''}
-          <div class="vypode-settings-hint">Syncs your watched, liked, and watchlist films from Letterboxd. Auto-syncs once per day.</div>
+          <div class="vypode-settings-hint">Builds a local-only database on this device with watched films, posters, ratings, likes, and review text where available.</div>
         </div>
 
         <!-- Filter Section -->
@@ -1265,24 +1423,40 @@
         <div class="vypode-settings-section">
           <div class="vypode-settings-section-title">Your Film Registry</div>
           <div class="vypode-stats-grid">
-            <div class="vypode-stat"><span class="vypode-stat-num">${stats.total || 0}</span><span class="vypode-stat-label">Total</span></div>
+            <div class="vypode-stat"><span class="vypode-stat-num vypode-stat-total">${stats.total || 0}</span><span class="vypode-stat-label">Total</span></div>
             <div class="vypode-stat"><span class="vypode-stat-num vypode-stat-watched">${stats.watched || 0}</span><span class="vypode-stat-label">Watched</span></div>
             <div class="vypode-stat"><span class="vypode-stat-num vypode-stat-liked">${stats.liked || 0}</span><span class="vypode-stat-label">Liked</span></div>
             <div class="vypode-stat"><span class="vypode-stat-num vypode-stat-watchlist">${stats.watchlist || 0}</span><span class="vypode-stat-label">Watchlist</span></div>
             <div class="vypode-stat"><span class="vypode-stat-num vypode-stat-skipped">${stats.skipped || 0}</span><span class="vypode-stat-label">Skipped</span></div>
+            <div class="vypode-stat"><span class="vypode-stat-num vypode-stat-rated">${stats.rated || 0}</span><span class="vypode-stat-label">Rated</span></div>
+            <div class="vypode-stat"><span class="vypode-stat-num vypode-stat-reviewed">${stats.reviewed || 0}</span><span class="vypode-stat-label">Reviewed</span></div>
           </div>
         </div>
 
-        <!-- Cloud Section -->
+        <!-- Database Section -->
         <div class="vypode-settings-section">
-          <div class="vypode-settings-section-title">Cloud Backup</div>
-          <div id="vypodeCloudStatus" class="vypode-cloud-status">Checking...</div>
-          <div class="vypode-cloud-actions">
-            <button class="vypode-settings-btn" id="vypodeCloudSignIn">Sign in with Google</button>
-            <button class="vypode-settings-btn vypode-btn-secondary" id="vypodeCloudPull" disabled>Restore from cloud</button>
-            <button class="vypode-settings-btn vypode-btn-secondary" id="vypodeCloudPush" disabled>Back up to cloud</button>
+          <div class="vypode-settings-section-title">Profile Database</div>
+          <div class="vypode-db-controls">
+            <input type="search" id="vypodeDbSearch" placeholder="Search title or review">
+            <select id="vypodeDbFilter">
+              <option value="all">All films</option>
+              <option value="watched">Watched</option>
+              <option value="liked">Liked</option>
+              <option value="watchlist">Watchlist</option>
+              <option value="rated">Rated</option>
+              <option value="reviewed">Reviewed</option>
+              <option value="missing-rating">Missing rating</option>
+              <option value="skipped">Skipped</option>
+            </select>
+            <select id="vypodeDbSort">
+              <option value="title">Title A-Z</option>
+              <option value="rating">Rating high-low</option>
+              <option value="year">Year newest</option>
+              <option value="updated">Recently updated</option>
+            </select>
           </div>
-          <div class="vypode-settings-hint">Sign in to back up your film registry across devices.</div>
+          <div class="vypode-db-summary" id="vypodeDbSummary"></div>
+          <div class="vypode-db-list" id="vypodeDbList"></div>
         </div>
 
         <!-- Data Section -->
@@ -1292,7 +1466,7 @@
             <button class="vypode-settings-btn vypode-btn-secondary" id="vypodeExport">Export data</button>
             <button class="vypode-settings-btn vypode-btn-secondary" id="vypodeImport">Import data</button>
             <button class="vypode-settings-btn vypode-btn-danger" id="vypodeClearSkipped">Clear skipped</button>
-            <button class="vypode-settings-btn vypode-btn-danger" id="vypodeClearAll">Clear all data</button>
+            <button class="vypode-settings-btn vypode-btn-danger" id="vypodeClearAll">Clear all local data</button>
           </div>
           <input type="file" id="vypodeImportFile" accept=".json" style="display:none">
         </div>
@@ -1316,61 +1490,8 @@
       });
     });
 
-    // Cloud status check
-    checkCloudStatus();
-
-    // Cloud sign in
-    document.getElementById('vypodeCloudSignIn').addEventListener('click', async () => {
-      const btn = document.getElementById('vypodeCloudSignIn');
-      btn.textContent = 'Signing in...';
-      btn.disabled = true;
-      try {
-        const result = await sendToBackground('cloudSignIn');
-        if (result.success) {
-          showFeedback('Signed in to cloud: ' + result.email, 'watchlist');
-          checkCloudStatus();
-        } else {
-          showFeedback('Sign in failed: ' + (result.error || 'Unknown error'), 'error');
-          btn.textContent = 'Sign in with Google';
-          btn.disabled = false;
-        }
-      } catch (e) {
-        showFeedback('Sign in failed', 'error');
-        btn.textContent = 'Sign in with Google';
-        btn.disabled = false;
-      }
-    });
-
-    // Cloud pull
-    document.getElementById('vypodeCloudPull').addEventListener('click', async () => {
-      showFeedback('Restoring from cloud...', 'watch');
-      try {
-        const result = await sendToBackground('cloudPull');
-        if (result.success && result.registry) {
-          const merged = window.VypodeFilmState.mergeFromCloud(result.registry);
-          showFeedback(`Restored ${result.count} films from cloud (${merged} updated)`, 'watchlist');
-        } else {
-          showFeedback('Restore failed: ' + (result.error || 'No data'), 'error');
-        }
-      } catch (e) {
-        showFeedback('Restore failed', 'error');
-      }
-    });
-
-    // Cloud push
-    document.getElementById('vypodeCloudPush').addEventListener('click', async () => {
-      showFeedback('Backing up to cloud...', 'watch');
-      try {
-        const result = await sendToBackground('cloudPush');
-        if (result.success) {
-          showFeedback(`Backed up ${result.count} films to cloud`, 'watchlist');
-        } else {
-          showFeedback('Backup failed: ' + (result.error || 'Unknown'), 'error');
-        }
-      } catch (e) {
-        showFeedback('Backup failed', 'error');
-      }
-    });
+    bindDatabaseControls();
+    renderDatabaseBrowser();
 
     // Export
     document.getElementById('vypodeExport').addEventListener('click', () => {
@@ -1394,12 +1515,21 @@
       if (!file) return;
       const reader = new FileReader();
       reader.onload = () => {
-        const result = window.VypodeFilmState.importData(reader.result);
-        if (result.success) {
-          showFeedback(`Imported ${result.merged} film entries`, 'watchlist');
-        } else {
-          showFeedback('Import failed: ' + result.error, 'error');
+        try {
+          const result = window.VypodeFilmState.importData(reader.result);
+          if (result.success) {
+            refreshSettingsStats();
+            showFeedback(`Imported ${result.merged} film entries`, 'watchlist');
+          } else {
+            showFeedback('Import failed: ' + result.error, 'error');
+          }
+        } finally {
+          e.target.value = '';
         }
+      };
+      reader.onerror = () => {
+        e.target.value = '';
+        showFeedback('Import failed: could not read file', 'error');
       };
       reader.readAsText(file);
     });
@@ -1407,16 +1537,20 @@
     // Clear skipped
     document.getElementById('vypodeClearSkipped').addEventListener('click', () => {
       if (confirm('Clear all skipped films? They will appear in your deck again.')) {
-        window.VypodeFilmState.clearSkipped();
-        showFeedback('Skipped films cleared', 'watchlist');
+        window.VypodeFilmState.clearSkipped().then(() => {
+          refreshSettingsStats();
+          showFeedback('Skipped films cleared', 'watchlist');
+        });
       }
     });
 
     // Clear all
     document.getElementById('vypodeClearAll').addEventListener('click', () => {
-      if (confirm('Delete ALL Vypode data? This cannot be undone.')) {
+      if (confirm('Delete ALL local Vypode data on this device? This cannot be undone.')) {
         window.VypodeFilmState.clearAll().then(() => {
-          showFeedback('All data cleared', 'watch');
+          chrome.storage.local.remove(['vypode_user'], () => {});
+          refreshSettingsStats();
+          showFeedback('All local data cleared', 'watch');
         });
       }
     });
@@ -1428,51 +1562,117 @@
     if (panel) { panel.classList.remove('visible'); setTimeout(() => panel.remove(), 300); }
   }
 
-  async function checkCloudStatus() {
-    const statusEl = document.getElementById('vypodeCloudStatus');
-    const signInBtn = document.getElementById('vypodeCloudSignIn');
-    const pullBtn = document.getElementById('vypodeCloudPull');
-    const pushBtn = document.getElementById('vypodeCloudPush');
-    if (!statusEl) return;
+  function refreshSettingsStats() {
+    const stats = window.VypodeFilmState?.getStats?.();
+    if (!stats) return;
 
-    try {
-      const result = await sendToBackground('getCloudStatus');
-      if (result.signedIn) {
-        statusEl.textContent = 'Signed in as ' + (result.email || 'Unknown');
-        statusEl.style.color = '#00c853';
-        if (signInBtn) { signInBtn.textContent = 'Sign out'; signInBtn.onclick = handleCloudSignOut; }
-        if (pullBtn) pullBtn.disabled = false;
-        if (pushBtn) pushBtn.disabled = false;
-      } else {
-        statusEl.textContent = 'Not signed in';
-        statusEl.style.color = 'rgba(255,255,255,0.5)';
+    const pairs = [
+      ['.vypode-stat-total', stats.total],
+      ['.vypode-stat-watched', stats.watched],
+      ['.vypode-stat-liked', stats.liked],
+      ['.vypode-stat-watchlist', stats.watchlist],
+      ['.vypode-stat-skipped', stats.skipped],
+      ['.vypode-stat-rated', stats.rated],
+      ['.vypode-stat-reviewed', stats.reviewed]
+    ];
+    for (const [selector, value] of pairs) {
+      const el = document.querySelector(selector);
+      if (el) el.textContent = value || 0;
+    }
+    const meta = window.VypodeFilmState?.getMeta?.();
+    const syncRow = document.querySelector('.vypode-sync-row');
+    let syncCounts = document.getElementById('vypodeSyncCounts');
+    if (meta?.syncCounts && syncRow) {
+      if (!syncCounts) {
+        syncCounts = document.createElement('div');
+        syncCounts.id = 'vypodeSyncCounts';
+        syncCounts.className = 'vypode-sync-counts';
+        syncRow.insertAdjacentElement('afterend', syncCounts);
       }
-    } catch (e) {
-      statusEl.textContent = 'Cloud unavailable';
-      statusEl.style.color = 'rgba(255,255,255,0.3)';
+      syncCounts.textContent = `${meta.syncCounts.watched || 0} watched • ${meta.syncCounts.watchlist || 0} watchlist • ${meta.syncCounts.liked || 0} liked`;
+    }
+    renderDatabaseBrowser();
+  }
+
+  function bindDatabaseControls() {
+    for (const id of ['vypodeDbSearch', 'vypodeDbFilter', 'vypodeDbSort']) {
+      document.getElementById(id)?.addEventListener('input', renderDatabaseBrowser);
+      document.getElementById(id)?.addEventListener('change', renderDatabaseBrowser);
     }
   }
 
-  async function handleCloudSignOut() {
-    try {
-      await sendToBackground('cloudSignOut');
-      showFeedback('Signed out from cloud', 'watch');
-      checkCloudStatus();
-    } catch (e) {
-      showFeedback('Sign out failed', 'error');
-    }
+  function databaseOptions() {
+    return {
+      search: document.getElementById('vypodeDbSearch')?.value || '',
+      filter: document.getElementById('vypodeDbFilter')?.value || 'all',
+      sort: document.getElementById('vypodeDbSort')?.value || 'title'
+    };
   }
 
-  function sendToBackground(action, data) {
-    return new Promise((resolve, reject) => {
-      chrome.runtime.sendMessage({ type: 'vypode', action, data }, (response) => {
-        if (chrome.runtime.lastError) {
-          reject(new Error(chrome.runtime.lastError.message));
-        } else {
-          resolve(response || {});
-        }
-      });
+  function renderDatabaseBrowser() {
+    const list = document.getElementById('vypodeDbList');
+    const summary = document.getElementById('vypodeDbSummary');
+    if (!list || !summary || !window.VypodeFilmState?.query) return;
+
+    const rows = window.VypodeFilmState.query(databaseOptions());
+    const visible = rows.slice(0, 80);
+    summary.textContent = rows.length
+      ? `Showing ${visible.length} of ${rows.length} films`
+      : 'No matching films yet. Run Collection Sync to build your local profile database.';
+
+    list.innerHTML = visible.map(film => {
+      const title = escapeHtml(film.title || film.slug);
+      const year = film.year ? ` <span>${escapeHtml(film.year)}</span>` : '';
+      const rating = film.ratingValue ? `${film.ratingValue}/5` : (film.rating ? escapeHtml(film.rating) : 'No rating');
+      const badges = [
+        film.watched ? 'Watched' : null,
+        film.liked ? 'Liked' : null,
+        film.watchlist ? 'Watchlist' : null,
+        film.reviewText ? 'Review' : null
+      ].filter(Boolean).map(label => `<span>${label}</span>`).join('');
+      const poster = film.poster
+        ? `<img src="${escapeHtml(film.poster)}" alt="">`
+        : '<div class="vypode-db-poster-empty"></div>';
+      return `
+        <button type="button" class="vypode-db-row" data-slug="${escapeHtml(film.slug)}">
+          ${poster}
+          <span class="vypode-db-main">
+            <strong>${title}${year}</strong>
+            <small>${escapeHtml(rating)}</small>
+            <span class="vypode-db-badges">${badges}</span>
+          </span>
+        </button>
+      `;
+    }).join('');
+
+    list.querySelectorAll('.vypode-db-row').forEach(row => {
+      row.addEventListener('click', () => showDatabaseDetail(row.dataset.slug));
     });
+  }
+
+  function showDatabaseDetail(slug) {
+    const film = window.VypodeFilmState?.get?.(slug);
+    if (!film) return;
+    const existing = document.querySelector('.vypode-db-detail');
+    if (existing) existing.remove();
+
+    const detail = document.createElement('div');
+    detail.className = 'vypode-db-detail';
+    detail.innerHTML = `
+      <button type="button" class="vypode-db-detail-close" aria-label="Close">\u2715</button>
+      <div class="vypode-db-detail-body">
+        ${film.poster ? `<img src="${escapeHtml(film.poster)}" alt="">` : ''}
+        <div>
+          <h4>${escapeHtml(film.title || slug)}${film.year ? ` <span>${escapeHtml(film.year)}</span>` : ''}</h4>
+          <p>${film.ratingValue ? `Your rating: ${film.ratingValue}/5` : 'No rating stored'}</p>
+          <p>${film.liked ? 'Liked' : 'Not liked'} &bull; ${film.watched ? 'Watched' : 'Not watched'}</p>
+          ${film.reviewText ? `<blockquote>${escapeHtml(film.reviewText)}</blockquote>` : '<p>No review text stored.</p>'}
+          ${film.url ? `<a href="${escapeHtml(film.url)}" target="_blank" rel="noopener noreferrer">Open film page</a>` : ''}
+        </div>
+      </div>
+    `;
+    document.body.appendChild(detail);
+    detail.querySelector('.vypode-db-detail-close').addEventListener('click', () => detail.remove());
   }
 
   // ==================== UI CREATION ====================
@@ -1728,6 +1928,10 @@
     }
   }
 
+  function goToNextCard() {
+    advanceToNextCard();
+  }
+
   // ── Event listeners ─────────────────────────────────────────────────
 
   function setupEventListeners(isDeck) {
@@ -1750,7 +1954,7 @@
 
     if (isDeck) {
       prevBtn?.addEventListener('click', goToPrevCard);
-      nextBtn?.addEventListener('click', skipCurrentFilm);
+      nextBtn?.addEventListener('click', goToNextCard);
     }
 
     card.addEventListener('mouseenter', () => { isOverCard = true; cursor.classList.add('visible'); });
@@ -2044,27 +2248,7 @@
     document.body.appendChild(btn);
   }
 
-  // Inject the main-world capture shim so we can see the exact request
-  // Letterboxd's own review/diary modal sends. Logs to console only.
-  function installCaptureShim() {
-    try {
-      const s = document.createElement('script');
-      s.src = chrome.runtime.getURL('inject-capture.js');
-      s.onload = () => s.remove();
-      (document.head || document.documentElement).appendChild(s);
-      window.addEventListener('message', (e) => {
-        if (e.source !== window || !e.data || !e.data.__vypodeCapture) return;
-        vyLog('CAPTURE', e.data.method, e.data.url, '\n  body:', e.data.body);
-      });
-      vyLog('capture shim installed — log a film normally on a film page to capture the real request');
-    } catch (e) {
-      vyWarn('capture shim failed:', e.message);
-    }
-  }
-
   async function init() {
-    installCaptureShim();
-
     // Initialize FilmState registry
     if (window.VypodeFilmState) {
       await window.VypodeFilmState.init();

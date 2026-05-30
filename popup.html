@@ -63,7 +63,7 @@
     /* Stats row */
     .stats {
       display: grid;
-      grid-template-columns: repeat(4, 1fr);
+      grid-template-columns: repeat(3, 1fr);
       gap: 6px;
       margin-bottom: 15px;
     }
@@ -79,6 +79,8 @@
     .stat-liked .stat-num { color: #ff4b4b; }
     .stat-watchlist .stat-num { color: #00c853; }
     .stat-skipped .stat-num { color: #6496ff; }
+    .stat-rated .stat-num { color: #ffcc00; }
+    .stat-reviewed .stat-num { color: #c9a2ff; }
 
     /* Instructions */
     .instructions {
@@ -151,6 +153,8 @@
     <div class="stat stat-liked"><span class="stat-num" id="statLiked">-</span><span class="stat-label">Liked</span></div>
     <div class="stat stat-watchlist"><span class="stat-num" id="statWatchlist">-</span><span class="stat-label">Watchlist</span></div>
     <div class="stat stat-skipped"><span class="stat-num" id="statSkipped">-</span><span class="stat-label">Skipped</span></div>
+    <div class="stat stat-rated"><span class="stat-num" id="statRated">-</span><span class="stat-label">Rated</span></div>
+    <div class="stat stat-reviewed"><span class="stat-num" id="statReviewed">-</span><span class="stat-label">Reviewed</span></div>
   </div>
 
   <div class="instructions">
@@ -182,47 +186,6 @@
     <strong>S</strong> opens settings &bull; <strong>R</strong> opens review
   </div>
 
-  <script>
-    // Load account status and stats from chrome.storage
-    chrome.storage.local.get(['vypode_user', 'vypode_state'], (result) => {
-      const user = result.vypode_user;
-      const state = result.vypode_state;
-
-      // Account
-      const nameEl = document.getElementById('accountName');
-      const statusEl = document.getElementById('accountStatus');
-      if (user && user.username) {
-        nameEl.textContent = user.username;
-        statusEl.textContent = 'Linked';
-        statusEl.className = 'status linked';
-      } else {
-        nameEl.textContent = 'No account linked';
-        statusEl.textContent = 'Log in to Letterboxd and visit any page';
-        statusEl.className = 'status unlinked';
-      }
-
-      // Stats
-      if (state && state.slugs) {
-        const slugs = state.slugs;
-        let watched = 0, liked = 0, watchlist = 0, skipped = 0;
-        for (const slug in slugs) {
-          const e = slugs[slug];
-          if (e.watched) watched++;
-          if (e.liked) liked++;
-          if (e.watchlist) watchlist++;
-          if (e.skipped) skipped++;
-        }
-        document.getElementById('statWatched').textContent = watched;
-        document.getElementById('statLiked').textContent = liked;
-        document.getElementById('statWatchlist').textContent = watchlist;
-        document.getElementById('statSkipped').textContent = skipped;
-      } else {
-        document.getElementById('statWatched').textContent = '0';
-        document.getElementById('statLiked').textContent = '0';
-        document.getElementById('statWatchlist').textContent = '0';
-        document.getElementById('statSkipped').textContent = '0';
-      }
-    });
-  </script>
+  <script src="popup.js"></script>
 </body>
 </html>
