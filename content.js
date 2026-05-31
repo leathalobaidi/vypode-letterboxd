@@ -2008,7 +2008,7 @@
     overlay.innerHTML = `
       <div class="vypode-container">
         <div class="vypode-header">
-          <div class="vypode-logo">VYPODE</div>
+          <div class="vypode-logo">SWIPE</div>
           ${filterBadge}
           <button class="vypode-review-btn" id="vypodeOpenReview" title="Write review (R)">Review</button>
           <button class="vypode-settings-btn-header" id="vypodeOpenSettings" title="Settings">\u2699</button>
