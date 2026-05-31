@@ -112,13 +112,23 @@ Sync stores normalized film records locally in `chrome.storage.local`:
 
 Large histories can take a few minutes because Vypode paginates through Letterboxd respectfully and fetches review text as optional metadata.
 
+## Privacy
+
+**Swipe for Letterboxd is local-first and collects no data for the developer.** There is no server, no analytics, and no developer-side account.
+
+- **Where your data lives.** Your film registry — titles, years, ratings, liked/watched/watchlist status, and review text where Letterboxd exposes it — is stored only in your own browser via `chrome.storage` on your device. Filter preferences use Chrome's built-in sync storage. Nothing is transmitted to the developer or any third party.
+- **What it reads.** To build that local database it reads your own Letterboxd profile pages, which requires you to be signed in. It reads only what it needs to record your watch history on your device.
+- **What it changes.** When you mark watched/liked/watchlist or submit a review, it acts on your real Letterboxd account using your active session — the same as if you clicked those controls yourself.
+
+This section serves as the extension's privacy policy.
+
 ## Letterboxd, requests, and your account
 
-Vypode acts entirely from inside your own logged-in browser session — it has no server and stores nothing off your device.
+Swipe for Letterboxd acts entirely from inside your own logged-in browser session — it has no server and stores nothing off your device.
 
-- **Authenticated requests.** A full Collection Sync issues many requests to `letterboxd.com` as you (paginating watched films, watchlist, and likes, plus optional review-text pages). Vypode throttles these (sequential paging with delays, low-concurrency review fetching) and backs off on `429`/`503`, but a large library still means a meaningful burst of traffic. Sync only when you intend to.
+- **Authenticated requests.** A full Collection Sync issues many requests to `letterboxd.com` as you (paginating watched films, watchlist, and likes, plus optional review-text pages). Swipe throttles these (sequential paging with delays, low-concurrency review fetching) and backs off on `429`/`503`, but a large library still means a meaningful burst of traffic. Sync only when you intend to.
 - **Account-changing actions.** Marking watched/liked/watchlist and submitting reviews write to your real Letterboxd account, using your active session. Review submission posts to a Letterboxd endpoint that is not a public, documented API, so it may change or break without notice.
-- **Your responsibility.** Use Vypode in accordance with [Letterboxd's Terms of Use](https://letterboxd.com/terms-of-use/). It is an unofficial, independent tool, not affiliated with or endorsed by Letterboxd. Use at your own risk.
+- **Your responsibility.** Use Swipe for Letterboxd in accordance with [Letterboxd's Terms of Use](https://letterboxd.com/terms-of-use/). It is an unofficial, independent tool, not affiliated with or endorsed by Letterboxd. Use at your own risk.
 
 ## Profile Database
 
