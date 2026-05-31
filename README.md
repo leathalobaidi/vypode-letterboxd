@@ -2,6 +2,12 @@
 
 A Chrome extension that adds a swipe-style interface and a local profile database for Letterboxd. It helps you move through films quickly, hide titles you have already handled, and search your own watched history by title, rating, liked status, and review text where Letterboxd exposes it.
 
+## What's New in v6.0.1
+
+- **Corrupted-storage safety** — Malformed persisted data (non-object `slugs`/`_meta`) no longer crashes extension load; it falls back to an empty registry.
+- **Throttle-resilient sync** — A `429`/`503` from Letterboxd is retried with backoff (honouring `Retry-After`) instead of aborting the whole sync.
+- **Politer review fetching** — Review-text enrichment runs at lower concurrency with a short inter-request pause.
+
 ## What's New in v6.0
 
 - **Fresh poster filtering** — Deck mode hides films you have already watched, liked, added to watchlist, or skipped.

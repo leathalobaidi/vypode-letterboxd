@@ -1,4 +1,4 @@
-// VYPODE FOR LETTERBOXD — FilmState Registry v6.0.0
+// VYPODE FOR LETTERBOXD — FilmState Registry v6.0.1
 // Persistent film state keyed by slug, stored in chrome.storage.local
 // Loaded before content.js — exposes window.VypodeFilmState
 
@@ -95,9 +95,9 @@
       if (version < DATA_VERSION) {
         migrateData(raw, version);
       }
-      meta = raw._meta || meta;
+      meta = (raw._meta && typeof raw._meta === 'object') ? raw._meta : meta;
       registry = Object.create(null);
-      const rawSlugs = raw.slugs || {};
+      const rawSlugs = (raw.slugs && typeof raw.slugs === 'object') ? raw.slugs : {};
       for (const slug in rawSlugs) {
         if (!isSafeSlug(slug)) continue;
         registry[slug] = normalizeEntry(rawSlugs[slug]);
@@ -193,12 +193,14 @@
   // ── Migration ───────────────────────────────────────────────────────
 
   function migrateData(raw, fromVersion) {
+    // Corrupted or hand-edited storage may carry a non-object _meta; coerce it
+    // so the version stamps below cannot throw on a primitive.
+    if (!raw._meta || typeof raw._meta !== 'object') raw._meta = {};
     // v0 -> v1: no structural changes yet, just stamp the version
     if (fromVersion < 1) {
-      raw._meta = raw._meta || {};
       raw._meta.version = 1;
     }
-    if (fromVersion < 2 && raw.slugs) {
+    if (fromVersion < 2 && raw.slugs && typeof raw.slugs === 'object') {
       for (const slug in raw.slugs) {
         if (!isSafeSlug(slug)) {
           delete raw.slugs[slug];
@@ -389,6 +391,10 @@
       for (const key of allowed) {
         if (key in patch && patch[key] !== undefined) entry[key] = patch[key];
       }
+      // NOTE: updateFilm is a literal patch — it does NOT fabricate a flag timestamp.
+      // A film marked watched with no watchedAt is intentionally surfaced by the
+      // 'missing-watched-date' filter. setFlag()/bulkSetFromSync() stamp 'now'
+      // because they represent an action that genuinely happened now.
       entry.source = source || patch.source || entry.source || 'userAction';
       entry.lastSyncedAt = patch.lastSyncedAt || entry.lastSyncedAt;
       entry.updatedAt = patch.updatedAt || now;
@@ -545,7 +551,7 @@
         clearTimeout(saveTimer);
         saveTimer = null;
       }
-      registry = {};
+      registry = Object.create(null);
       meta = { version: DATA_VERSION, lastSyncAt: null, syncDuration: null, syncCounts: null };
       prefs = { ...DEFAULT_PREFS };
       return new Promise((resolve) => {

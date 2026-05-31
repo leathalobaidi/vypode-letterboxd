@@ -1,7 +1,8 @@
-// VYPODE FOR LETTERBOXD — Content Script v6.0.0
+// VYPODE FOR LETTERBOXD — Content Script v6.0.1
 // Background actions + auto-advance + auto-next-page + Voice Review + Star Rating
 // v6.0.0: FilmState registry, fresh poster filtering, durable skip,
 //         account awareness, collection sync, settings panel, local profile database
+// v6.0.1: corrupted-storage load safety, 429/503 sync backoff, throttled review fan-out
 (function() {
   'use strict';
   if (window.vypodeInjected) return;
@@ -360,6 +361,10 @@
   // Lazy-fetch film details (year, director, genres) for deck cards
   async function enrichFilmData(film) {
     if (!film || film.enriched) return;
+    // Cap retries so a persistently failing URL (offline / flaky network) can't
+    // trigger an unbounded fetch loop on every deck advance.
+    film.enrichAttempts = (film.enrichAttempts || 0) + 1;
+    if (film.enrichAttempts > 3) { film.enriched = true; return; }
     film.enriched = true; // Mark immediately to avoid duplicate fetches
     try {
       const response = await fetch(film.url, { credentials: 'same-origin' });
@@ -714,6 +719,10 @@
     }
 
     const filmSlug = (filmUrl.match(/\/film\/([^\/]+)/) || [])[1];
+    // Capture the card under review NOW — the verify step is async (~3s) and the
+    // deck index may move before the callback runs.
+    const reviewedIndex = currentDeckIndex;
+    const reviewedCard = isListingPage ? filmDeck[reviewedIndex] : null;
     showFeedback('Submitting review...', 'watchlist');
 
     try {
@@ -778,9 +787,10 @@
           url: canonicalUrl
         }, 'userAction');
         hideReviewPanel();
-        if (isListingPage) {
-          filmDeck[currentDeckIndex].actioned = true;
-          advanceToNextCard();
+        if (isListingPage && reviewedCard) {
+          reviewedCard.actioned = true;
+          // Only advance if the deck hasn't already moved past the reviewed card.
+          if (currentDeckIndex === reviewedIndex) advanceToNextCard();
         }
       });
     } catch (e) {
@@ -1139,7 +1149,7 @@
       if (page > 1) await sleep(150);
 
       try {
-        const response = await fetchWithTimeout(url, { credentials: 'same-origin' }, 15000);
+        const response = await fetchWithRetry(url, { credentials: 'same-origin' }, 15000);
         if (!response.ok) {
           return {
             films: Array.from(films.values()),
@@ -1248,11 +1258,15 @@
       syncStatus.textContent = `Loading review text where available... 0/${queue.length}`;
     }
     let index = 0;
-    const workers = Array.from({ length: Math.min(4, queue.length) }, async () => {
+    // Throttle: 2 concurrent workers with a short inter-request pause keeps the
+    // review-text fan-out polite to letterboxd.com on large histories.
+    const CONCURRENCY = Math.min(2, queue.length);
+    const workers = Array.from({ length: CONCURRENCY }, async () => {
       while (index < queue.length) {
         const film = queue[index++];
+        if (index > CONCURRENCY) await sleep(250);
         try {
-          const response = await fetchWithTimeout(film.reviewUrl, { credentials: 'same-origin', cache: 'no-store' }, 12000);
+          const response = await fetchWithRetry(film.reviewUrl, { credentials: 'same-origin', cache: 'no-store' }, 12000);
           if (!response.ok) continue;
           const html = await response.text();
           const doc = new DOMParser().parseFromString(html, 'text/html');
@@ -1280,6 +1294,28 @@
       return await fetch(url, { ...(options || {}), signal: controller.signal });
     } finally {
       clearTimeout(timeout);
+    }
+  }
+
+  // Like fetchWithTimeout, but treats Letterboxd throttling (429 / 503) as
+  // retryable rather than fatal: honour Retry-After when present, otherwise
+  // back off exponentially. A throttled page is recoverable, so it must not
+  // abort the whole sync as "incomplete".
+  async function fetchWithRetry(url, options, timeoutMs, maxRetries = 3) {
+    let attempt = 0;
+    while (true) {
+      const response = await fetchWithTimeout(url, options, timeoutMs);
+      if ((response.status === 429 || response.status === 503) && attempt < maxRetries) {
+        const headerVal = response.headers?.get?.('Retry-After');
+        const retryAfter = parseInt(headerVal, 10);
+        const backoff = Number.isFinite(retryAfter)
+          ? Math.min(retryAfter * 1000, 30000)
+          : Math.min(1000 * Math.pow(2, attempt), 8000);
+        await sleep(backoff);
+        attempt++;
+        continue;
+      }
+      return response;
     }
   }
 
@@ -1648,7 +1684,7 @@
           <input type="file" id="vypodeImportFile" accept=".json" style="display:none">
         </div>
 
-        <div class="vypode-settings-footer">Vypode v6.0.0</div>
+        <div class="vypode-settings-footer">Vypode v6.0.1</div>
       </div>
     `;
 
