@@ -7,9 +7,15 @@ function renderPopup(result) {
   const nameEl = document.getElementById('accountName');
   const statusEl = document.getElementById('accountStatus');
   if (user && user.username) {
-    nameEl.textContent = user.username;
-    statusEl.textContent = 'Linked';
-    statusEl.className = 'status linked';
+    if (user.active === false) {
+      nameEl.textContent = 'No active Letterboxd login';
+      statusEl.textContent = 'Log in to Letterboxd and refresh';
+      statusEl.className = 'status unlinked';
+    } else {
+      nameEl.textContent = user.username;
+      statusEl.textContent = 'Linked';
+      statusEl.className = 'status linked';
+    }
   } else {
     nameEl.textContent = 'No account linked';
     statusEl.textContent = 'Log in to Letterboxd and visit any page';

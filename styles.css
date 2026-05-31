@@ -693,6 +693,11 @@
 .vypode-btn-cancel:hover { background: rgba(255, 255, 255, 0.2); }
 .vypode-btn-submit { background: linear-gradient(135deg, #00c853, #00e676); color: white; }
 .vypode-btn-submit:hover { transform: scale(1.05); }
+.vypode-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  transform: none !important;
+}
 
 .vypode-review-shortcuts { text-align: center; color: rgba(255, 255, 255, 0.4); font-size: 11px; }
 .vypode-review-shortcuts b { color: rgba(255, 255, 255, 0.6); }
@@ -801,6 +806,11 @@
   border-radius: 10px;
   font-size: 11px;
   font-weight: 600;
+}
+
+.vypode-account-badge-muted {
+  background: rgba(255, 255, 255, 0.1);
+  color: rgba(255, 255, 255, 0.55);
 }
 
 .vypode-account-warn {

@@ -37,6 +37,32 @@ test('review and local data copy sets the right user expectations', () => {
   assert.match(contentJs, /Clear all local data/);
 });
 
+test('account-changing actions require an active Letterboxd session', () => {
+  assert.match(contentJs, /let isLetterboxdSessionActive = false/);
+  assert.match(contentJs, /function requireActiveLetterboxdSession/);
+  assert.match(contentJs, /Log in to Letterboxd to/);
+  assert.match(contentJs, /if \(!requireActiveLetterboxdSession\('mark films as watched'\)\) return false/);
+  assert.match(contentJs, /if \(!requireActiveLetterboxdSession\('like films'\)\) return false/);
+  assert.match(contentJs, /if \(!requireActiveLetterboxdSession\('add films to your watchlist'\)\) return false/);
+  assert.match(contentJs, /if \(!requireActiveLetterboxdSession\('submit reviews'\)\) return/);
+  assert.match(contentJs, /Log in to submit/);
+});
+
+test('cached profile is not presented as an active login', () => {
+  assert.match(contentJs, /active: false/);
+  assert.match(contentJs, /Not logged in to Letterboxd/);
+  assert.doesNotMatch(contentJs, /Last profile:/);
+  assert.match(popupJs, /No active Letterboxd login/);
+  assert.match(popupJs, /Log in to Letterboxd and refresh/);
+});
+
+test('collection sync requires the current browser session to be logged in', () => {
+  assert.match(contentJs, /if \(!isLetterboxdSessionActive\) \{/);
+  assert.match(contentJs, /Log in to Letterboxd to sync your profile/);
+  assert.match(contentJs, /id="vypodeSyncBtn" \$\{!isLetterboxdSessionActive \? 'disabled' : ''\}/);
+  assert.match(contentJs, /Log in to Letterboxd and refresh to sync your own profile database/);
+});
+
 test('collection sync preserves true flags when records appear in multiple collections', () => {
   assert.match(contentJs, /function mergeSyncedFilmRecord/);
   assert.match(contentJs, /merged\[flag\] = Boolean\(merged\[flag\] \|\| incoming\[flag\]\)/);

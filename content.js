@@ -32,6 +32,7 @@
 
   // Account state
   let letterboxdUsername = null;
+  let isLetterboxdSessionActive = false;
   let isSyncing = false;
 
   // Track how many films were filtered so we can show a badge
@@ -120,11 +121,19 @@
   // ── Account detection ───────────────────────────────────────────────
   // Letterboxd shows the logged-in username in the nav bar
 
+  function pageShowsSignedOutNav() {
+    return Array.from(document.querySelectorAll('a[href]')).some(link => {
+      const href = link.getAttribute('href') || '';
+      return /sign[\s-]*in/i.test(link.textContent || '') && href.includes('sign-in');
+    });
+  }
+
   function detectLetterboxdUsername() {
     // Primary: nav profile link
     const profileLink = document.querySelector('.main-nav a[href*="/"][class*="avatar"]') ||
-                        document.querySelector('a.avatar[href]') ||
-                        document.querySelector('.nav .profile-menu a[href]');
+                        document.querySelector('.main-nav a.avatar[href]') ||
+                        document.querySelector('.nav .profile-menu a[href]') ||
+                        document.querySelector('header a.avatar[href]');
     if (profileLink) {
       const match = profileLink.getAttribute('href')?.match(/^\/([^\/]+)\/?$/);
       if (match) return match[1];
@@ -145,27 +154,45 @@
       }
     }
 
-    // Fallback: check body data attribute
-    const body = document.body;
-    if (body.dataset.owner) return body.dataset.owner;
-
     return null;
   }
 
   async function initAccount() {
-    letterboxdUsername = detectLetterboxdUsername();
-    if (letterboxdUsername) {
-      // Store locally
-      chrome.storage.local.set({ vypode_user: { username: letterboxdUsername, detectedAt: new Date().toISOString() } });
+    const isSignedOut = pageShowsSignedOutNav();
+    const activeUsername = isSignedOut ? null : detectLetterboxdUsername();
+    if (activeUsername && !isSignedOut) {
+      letterboxdUsername = activeUsername;
+      isLetterboxdSessionActive = true;
+      chrome.storage.local.set({
+        vypode_user: {
+          username: letterboxdUsername,
+          detectedAt: new Date().toISOString(),
+          active: true
+        }
+      });
     } else {
-      // Try to load from storage (may have been detected on a previous page)
+      isLetterboxdSessionActive = false;
       const result = await new Promise(resolve => {
         chrome.storage.local.get(['vypode_user'], resolve);
       });
       if (result.vypode_user?.username) {
         letterboxdUsername = result.vypode_user.username;
+        chrome.storage.local.set({
+          vypode_user: {
+            ...result.vypode_user,
+            active: false,
+            lastCheckedAt: new Date().toISOString()
+          }
+        });
       }
     }
+  }
+
+  function requireActiveLetterboxdSession(actionLabel) {
+    if (isLetterboxdSessionActive) return true;
+    const action = actionLabel || 'change films on Letterboxd';
+    showFeedback(`Log in to Letterboxd to ${action}`, 'error');
+    return false;
   }
 
   // ── Page type detection ─────────────────────────────────────────────
@@ -364,6 +391,7 @@
   }
 
   function performWatch() {
+    if (!requireActiveLetterboxdSession('mark films as watched')) return false;
     const buttons = findButtons();
     if (buttons.watchBtn) {
       buttons.watchBtn.click();
@@ -376,6 +404,7 @@
   }
 
   function performLike() {
+    if (!requireActiveLetterboxdSession('like films')) return false;
     const buttons = findButtons();
     if (buttons.likeBtn) {
       buttons.likeBtn.click();
@@ -388,6 +417,7 @@
   }
 
   function performWatchlist() {
+    if (!requireActiveLetterboxdSession('add films to your watchlist')) return false;
     const buttons = findButtons();
     if (buttons.watchlistBtn) {
       buttons.watchlistBtn.click();
@@ -408,6 +438,12 @@
   }
 
   function performBackgroundAction(filmUrl, action) {
+    const actionLabels = {
+      watch: 'mark films as watched',
+      like: 'like films',
+      watchlist: 'add films to your watchlist'
+    };
+    if (!requireActiveLetterboxdSession(actionLabels[action])) return;
     if (isProcessingAction) return;
     isProcessingAction = true;
 
@@ -565,6 +601,7 @@
   // Direct API submission — POSTs to /s/save-diary-entry like Letterboxd's own modal does.
   // Avoids the fragile hidden-iframe DOM-scraping approach entirely.
   async function submitReview(filmUrl, reviewText, rating) {
+    if (!requireActiveLetterboxdSession('submit reviews')) return;
     if (isProcessingAction) return;
     isProcessingAction = true;
 
@@ -921,6 +958,10 @@
   // ==================== COLLECTION SYNC ENGINE ====================
 
   async function runCollectionSync() {
+    if (!isLetterboxdSessionActive) {
+      showFeedback('Log in to Letterboxd to sync your profile', 'error');
+      return { success: false, error: 'Not logged in' };
+    }
     if (!letterboxdUsername) {
       showFeedback('No Letterboxd account detected — log in first', 'error');
       return { success: false, error: 'Not logged in' };
@@ -1275,6 +1316,9 @@
 
     const film = isListingPage ? filmDeck[currentDeckIndex] : getFilmData();
     const safeTitle = escapeHtml(film.title);
+    const inactiveReviewNotice = !isLetterboxdSessionActive
+      ? '<div class="vypode-review-notice vypode-review-warning">Log in to Letterboxd and refresh before submitting a review.</div>'
+      : '';
 
     const panel = document.createElement('div');
     panel.className = 'vypode-review-panel';
@@ -1294,6 +1338,7 @@
         <div class="vypode-review-section">
           <label>Your review:</label>
           <div class="vypode-review-notice">Submitting creates a Letterboxd diary entry for today using this rating and review text.</div>
+          ${inactiveReviewNotice}
           <div class="vypode-dictate-row">
             <button class="vypode-mic-btn" id="vypodeMicBtn">Dictate</button>
             <span class="vypode-mic-hint">or just type below</span>
@@ -1303,7 +1348,7 @@
         </div>
         <div class="vypode-review-actions">
           <button class="vypode-btn vypode-btn-cancel" id="vypodeReviewCancel">Cancel</button>
-          <button class="vypode-btn vypode-btn-submit" id="vypodeReviewSubmit">Submit Review</button>
+          <button class="vypode-btn vypode-btn-submit" id="vypodeReviewSubmit" ${!isLetterboxdSessionActive ? 'disabled' : ''}>${isLetterboxdSessionActive ? 'Submit Review' : 'Log in to submit'}</button>
         </div>
         <div class="vypode-review-shortcuts">
           <span><b>1-5</b> stars &bull; <b>Esc</b> close &bull; <b>Enter</b> submit</span>
@@ -1354,6 +1399,16 @@
     const stats = window.VypodeFilmState?.getStats() || {};
     const lastSync = meta.lastSyncAt ? formatTimeAgo(meta.lastSyncAt) : 'Never';
     const safeUsername = letterboxdUsername ? escapeHtml(letterboxdUsername) : null;
+    const accountHtml = isLetterboxdSessionActive && safeUsername
+      ? `<div class="vypode-account-row">
+          <span class="vypode-account-avatar">\ud83d\udc64</span>
+          <span class="vypode-account-name">${safeUsername}</span>
+          <span class="vypode-account-badge">Linked</span>
+        </div>`
+      : `<div class="vypode-account-row">
+          <span class="vypode-account-warn">\u26a0\ufe0f Not logged in to Letterboxd</span>
+        </div>
+        <div class="vypode-settings-hint">Log in to Letterboxd and refresh before syncing, marking, liking, watchlisting, or submitting reviews.</div>`;
 
     const panel = document.createElement('div');
     panel.className = 'vypode-settings-panel';
@@ -1367,17 +1422,7 @@
         <!-- Account Section -->
         <div class="vypode-settings-section">
           <div class="vypode-settings-section-title">Letterboxd Account</div>
-          ${safeUsername
-            ? `<div class="vypode-account-row">
-                <span class="vypode-account-avatar">\ud83d\udc64</span>
-                <span class="vypode-account-name">${safeUsername}</span>
-                <span class="vypode-account-badge">Linked</span>
-              </div>`
-            : `<div class="vypode-account-row">
-                <span class="vypode-account-warn">\u26a0\ufe0f Not logged in to Letterboxd</span>
-              </div>
-              <div class="vypode-settings-hint">Log in to Letterboxd and refresh to link your account.</div>`
-          }
+          ${accountHtml}
         </div>
 
         <!-- Sync Section -->
@@ -1385,12 +1430,12 @@
           <div class="vypode-settings-section-title">Collection Sync</div>
           <div class="vypode-sync-row">
             <span id="vypodeSyncStatus" class="vypode-sync-status">Last sync: ${escapeHtml(lastSync)}</span>
-            <button class="vypode-sync-btn" id="vypodeSyncBtn" ${!safeUsername ? 'disabled' : ''}>Sync now</button>
+            <button class="vypode-sync-btn" id="vypodeSyncBtn" ${!isLetterboxdSessionActive ? 'disabled' : ''}>Sync now</button>
           </div>
           ${meta.syncCounts ? `<div class="vypode-sync-counts" id="vypodeSyncCounts">
             ${meta.syncCounts.watched || 0} watched &bull; ${meta.syncCounts.watchlist || 0} watchlist &bull; ${meta.syncCounts.liked || 0} liked
           </div>` : ''}
-          <div class="vypode-settings-hint">Builds a local-only database on this device with watched films, posters, ratings, likes, and review text where available.</div>
+          <div class="vypode-settings-hint">${isLetterboxdSessionActive ? 'Builds a local-only database on this device with watched films, posters, ratings, likes, and review text where available.' : 'Log in to Letterboxd and refresh to sync your own profile database.'}</div>
         </div>
 
         <!-- Filter Section -->
