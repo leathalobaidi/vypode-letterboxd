@@ -98,8 +98,17 @@ The deck, database UI, and Collection Sync run on Letterboxd pages and read your
 profile pages while you are signed in. Scope is limited to letterboxd.com.
 
 ────────────────────────────────────────────────────────────────────────
-GRAPHICS TO UPLOAD
+CONTACT / LINKS  (paste into the dashboard's URL fields)
 ────────────────────────────────────────────────────────────────────────
-1. Icon 128×128 — icons/icon128.png
-2. Screenshot 1280×800 — REQUIRED, still to capture (the swipe deck + the database browser)
-3. Promo tiles — optional
+HOMEPAGE URL:        https://leathalobaidi.github.io
+SUPPORT URL:         https://github.com/leathalobaidi/vypode-letterboxd/issues
+PRIVACY POLICY URL:  https://github.com/leathalobaidi/vypode-letterboxd#privacy
+
+────────────────────────────────────────────────────────────────────────
+GRAPHICS TO UPLOAD  (all in ~/store-assets/out/, 24-bit PNG no-alpha)
+────────────────────────────────────────────────────────────────────────
+1. Icon 128×128         — icons/icon128.png
+2. Screenshots (1280×800, ≥1) — swipe-1-deck.png  +  swipe-2-database.png
+3. Small promo (440×280)      — swipe-promo-440x280.png
+4. Marquee (1400×560)         — swipe-marquee-1400x560.png
+5. Promo video (optional)     — upload youtube the demo if you make one; paste the YouTube URL
