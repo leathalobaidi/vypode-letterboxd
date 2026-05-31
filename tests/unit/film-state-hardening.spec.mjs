@@ -192,6 +192,49 @@ test('concurrent storage write is merged on flush (last-writer-wins per flag)', 
   assert.equal(saved.watchlist, true, 'kept this tab\'s watchlist');
 });
 
+test('same-millisecond tie: a userAction beats a collectionSync reconcile (T8)', async () => {
+  const T = '2026-05-31T12:00:00.000Z';   // identical timestamp on both sides
+  const { FS, localArea } = makeFilmState({
+    local: { vypode_state: registry({
+      // In-memory (this tab): a STALE reconcile clearing watched, same instant.
+      arrival: { title: 'Arrival', watched: false, watchedAt: T, source: 'collectionSync', updatedAt: T }
+    }) }
+  });
+  await FS.init();
+  // Another tab already persisted the user's deliberate "watched = true" at the SAME ms.
+  localArea.store.vypode_state = registry({
+    arrival: { title: 'Arrival', watched: true, watchedAt: T, source: 'userAction', updatedAt: T }
+  });
+  FS.flush();                 // writeToStorage re-reads the userAction + merges
+  await tick();
+  assert.equal(localArea.store.vypode_state.slugs.arrival.watched, true,
+    'the live user action must not be clobbered by a same-instant reconcile');
+});
+
+test('large registry coalesces user-action writes instead of writing per action (T6)', async () => {
+  const slugs = {};
+  for (let i = 0; i < 2500; i++) slugs['film-' + i] = { title: 'F' + i, watched: true, watchedAt: '2024-01-01T00:00:00.000Z' };
+  const { FS, localArea } = makeFilmState({ local: { vypode_state: registry(slugs) } });
+  await FS.init();
+  let writes = 0;
+  const realSet = localArea.set;
+  localArea.set = (items, cb) => { writes++; realSet(items, cb); };
+  // Burst of rapid user actions on a large library.
+  for (let i = 0; i < 5; i++) FS.setFlag('film-' + i, 'liked', true, 'userAction');
+  assert.equal(writes, 0, 'no synchronous full-registry write during the burst (debounced)');
+  FS.flush();                 // flush guarantees the coalesced write lands
+  await tick();
+  assert.ok(writes >= 1 && writes <= 2, `burst coalesced into <=2 writes, saw ${writes}`);
+  // Small libraries keep writing immediately (no regression).
+  const small = makeFilmState();
+  await small.FS.init();
+  let smallWrites = 0;
+  const sset = small.localArea.set;
+  small.localArea.set = (items, cb) => { smallWrites++; sset(items, cb); };
+  small.FS.setFlag('arrival', 'watched', true, 'userAction');
+  assert.ok(smallWrites >= 1, 'small library still writes immediately');
+});
+
 // ───────────────────────────── reconcileFlags safety ───────────────────────
 
 test('reconcileFlags only clears collectionSync-sourced flags, never user actions', async () => {

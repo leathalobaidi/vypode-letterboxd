@@ -1,8 +1,9 @@
-// VYPODE FOR LETTERBOXD — Content Script v6.0.1
+// VYPODE FOR LETTERBOXD — Content Script v6.0.2
 // Background actions + auto-advance + auto-next-page + Voice Review + Star Rating
 // v6.0.0: FilmState registry, fresh poster filtering, durable skip,
 //         account awareness, collection sync, settings panel, local profile database
 // v6.0.1: corrupted-storage load safety, 429/503 sync backoff, throttled review fan-out
+// v6.0.2: same-instant reconcile/userAction tie-break, adaptive debounce for large libraries
 (function() {
   'use strict';
   if (window.vypodeInjected) return;
@@ -1684,7 +1685,7 @@
           <input type="file" id="vypodeImportFile" accept=".json" style="display:none">
         </div>
 
-        <div class="vypode-settings-footer">Vypode v6.0.1</div>
+        <div class="vypode-settings-footer">Vypode v6.0.2</div>
       </div>
     `;
 

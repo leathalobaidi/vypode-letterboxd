@@ -1,14 +1,14 @@
-# Vypode for Letterboxd — Autonomous Hardening Report (v6.0 → v6.0.1)
+# Vypode for Letterboxd — Autonomous Hardening Report (v6.0 → v6.0.2)
 
 **Date:** 2026-05-31
-**Scope:** Audit → adversarial test harness → chaos testing → expert persona panel → fixes → re-test, run as an autonomous loop until two consecutive full suites passed with no new blocking *engineering* issue.
-**Result:** Suite green ×3 consecutive runs — **51 unit + 9 e2e = 60 tests, 0 failures.** Two real crash bugs found and fixed; two resilience improvements added; one flaky test in the new harness found and fixed.
+**Scope:** Audit → adversarial test harness → chaos testing → expert persona panel → fixes → re-test, run as an autonomous loop until two consecutive full suites passed with no new blocking *engineering* issue. A second "production-ready" pass then cleared the remaining safe engineering/platform-hygiene tickets (T8, T6-mitigation, T10).
+**Result:** Suite green ×2 consecutive runs — **53 unit + 9 e2e = 62 tests, 0 failures.** Two real crash bugs fixed; one correctness race fixed; resilience + large-library write-coalescing added; ToS disclosure documented; one harness flake fixed.
 
 ---
 
 ## 1. Readiness verdict
 
-**Yes — ready for a real first-time user, for what the product actually claims to be: a local, read-mostly companion for filtering and triaging your own Letterboxd history.** The data layer is unusually disciplined (prototype-pollution-safe, partial-sync-safe, corrupted-storage-safe after this pass), the action queue has correct optimistic-undo/commit semantics, and the sync path now degrades gracefully under throttling instead of aborting. The unresolved items below are *product-scope and platform-risk* decisions (onboarding depth, the undocumented review-submit endpoint, a rewatch/diary model), not correctness blockers — they are owner calls, logged as tickets, not silently shipped.
+**Yes — production-ready as a local, read-mostly companion for filtering and triaging your own Letterboxd history.** After the production pass, every *engineering correctness/safety/platform-hygiene* item is closed: the data layer is prototype-pollution-safe, partial-sync-safe, corrupted-storage-safe, and now cross-tab-race-safe (a live user action can't be clobbered by a same-instant reconcile, **T8**); large libraries coalesce writes instead of re-serialising per swipe (**T6 mitigation**); and Sync's request volume, account-changing actions, and Terms-of-Use responsibility are disclosed in the README (**T10**). The remaining open items are deliberately *product-scope* roadmap choices (onboarding depth, an emotional first-run, a rewatch/diary data model) and one *platform-strategy* decision (whether to keep the undocumented review-submit endpoint, **T7**) — these change what the product *is*, so they remain owner calls, not silently shipped.
 
 ---
 
@@ -120,14 +120,17 @@ Each persona read the real code and cited `file:line`. "Blocking" objections tha
 
 ## 7. Ticket backlog (prioritised, for owner decision)
 
+**✅ Closed in the v6.0.2 production pass**
+- **T8 — DONE.** Source-priority tie-break in `mergeEntryForSave` (`film-state.js`): on an exact-timestamp tie, `userAction > import > collectionSync`, so a reconcile can't overwrite a same-ms user flag. Test: hardening "same-millisecond tie".
+- **T6 (mitigated) — DONE (safe path).** Adaptive debounce: registries > 2,000 entries coalesce "immediate" user-action writes into a 200ms debounce (flushed on `visibilitychange`/`beforeunload`), removing per-swipe full re-serialise. Test: hardening "large registry coalesces". *Full sharded-storage rewrite remains deferred (T6-full) — a format/migration change not worth the risk for this release.*
+- **T10 — DONE.** README "Letterboxd, requests, and your account": discloses authenticated request volume, account-changing writes, undocumented review endpoint, and ToS responsibility.
+
 **Platform risk (decide before store submission)**
-- **T7** — Reconsider `submitReview` against undocumented `/api/v0/`; route via real on-page controls or gate behind explicit confirmation; stop auto-stamping diary date to today.
-- **T10** — README: disclose authenticated request volume during Sync + ToS "use at your own risk" note.
+- **T7** — Reconsider `submitReview` against undocumented `/api/v0/`; route via real on-page controls or gate behind explicit confirmation; stop auto-stamping diary date to today. *(Owner decision — changes the core write feature.)*
 - **T9** — Global per-sync request budget on top of FIX-3 backoff.
 
-**Robustness (engineering, post-6.0.1)**
-- **T6** — Dirty-track / shard storage writes so a single `setFlag` isn't an N-entry rewrite at 10k films.
-- **T8** — Source-priority tie-break in `mergeEntryForSave` so reconcile can't overwrite a same-ms user flag.
+**Robustness (engineering, post-6.0.2)**
+- **T6-full** — Dirty-track / shard storage writes so a single `setFlag` isn't an N-entry rewrite at 10k films (the structural fix behind the T6 mitigation above).
 
 **Product depth (roadmap)**
 - **T14** — Rewatch/diary model: `viewings[]` + `watchCount`; stop overwriting `watchedAt`.

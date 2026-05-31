@@ -1,4 +1,4 @@
-// VYPODE FOR LETTERBOXD — FilmState Registry v6.0.1
+// VYPODE FOR LETTERBOXD — FilmState Registry v6.0.2
 // Persistent film state keyed by slug, stored in chrome.storage.local
 // Loaded before content.js — exposes window.VypodeFilmState
 
@@ -116,6 +116,16 @@
     return Number.isFinite(time) ? time : 0;
   }
 
+  // Tie-break priority when two writes share the exact same timestamp (e.g. a
+  // background reconcile and a deliberate user action landing in the same
+  // millisecond across tabs). A real user action must never be silently
+  // overwritten by an automated sync/reconcile that merely happened to tie.
+  function sourcePriority(source) {
+    if (source === 'userAction') return 3;
+    if (source === 'import') return 2;
+    return 1; // collectionSync, domSync, null
+  }
+
   function mergeEntryForSave(storedEntry, localEntry) {
     const stored = normalizeEntry(storedEntry);
     const local = normalizeEntry(localEntry);
@@ -131,7 +141,11 @@
       const localTs = timestamp(local[flag + 'At']);
       const storedTs = timestamp(stored[flag + 'At']);
       if (localTs || storedTs) {
-        if (localTs >= storedTs) {
+        // Newer timestamp wins; on an exact tie, higher source priority wins so
+        // a userAction beats a same-instant collectionSync reconcile.
+        const localWins = localTs > storedTs ||
+          (localTs === storedTs && sourcePriority(local.source) >= sourcePriority(stored.source));
+        if (localWins) {
           merged[flag] = Boolean(local[flag]);
           merged[flag + 'At'] = local[flag + 'At'];
         }
@@ -175,10 +189,18 @@
     });
   }
 
+  // Above this many entries, writeToStorage's full re-serialize is expensive
+  // enough that even "immediate" user-action writes are coalesced into a short
+  // debounce so a burst of swipes doesn't rewrite the whole registry per action.
+  const LARGE_REGISTRY = 2000;
+
   function saveToStorage(delayMs) {
     // Debounced save: coalesce rapid writes into a single storage call
     if (saveTimer) clearTimeout(saveTimer);
-    const delay = delayMs === undefined ? 300 : delayMs;
+    let delay = delayMs === undefined ? 300 : delayMs;
+    // Adaptive: never write a large library synchronously per action. flush()
+    // (called on visibilitychange/beforeunload) guarantees pending writes land.
+    if (delay <= 0 && Object.keys(registry).length > LARGE_REGISTRY) delay = 200;
     if (delay <= 0) {
       writeToStorage();
       return;

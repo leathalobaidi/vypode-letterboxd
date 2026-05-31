@@ -2,6 +2,12 @@
 
 A Chrome extension that adds a swipe-style interface and a local profile database for Letterboxd. It helps you move through films quickly, hide titles you have already handled, and search your own watched history by title, rating, liked status, and review text where Letterboxd exposes it.
 
+## What's New in v6.0.2
+
+- **No lost user actions** — A deliberate mark (watched/liked/etc.) can no longer be overwritten by a background sync that reconciles in the same instant across tabs.
+- **Smoother large libraries** — On big histories, rapid swipes are coalesced into fewer storage writes (flushed on tab close), avoiding a full re-save per action.
+- **Letterboxd disclosure** — README now documents Sync's request volume, account-changing actions, and Terms-of-Use responsibility.
+
 ## What's New in v6.0.1
 
 - **Corrupted-storage safety** — Malformed persisted data (non-object `slugs`/`_meta`) no longer crashes extension load; it falls back to an empty registry.
@@ -102,6 +108,14 @@ Sync stores normalized film records locally in `chrome.storage.local`:
 ```
 
 Large histories can take a few minutes because Vypode paginates through Letterboxd respectfully and fetches review text as optional metadata.
+
+## Letterboxd, requests, and your account
+
+Vypode acts entirely from inside your own logged-in browser session — it has no server and stores nothing off your device.
+
+- **Authenticated requests.** A full Collection Sync issues many requests to `letterboxd.com` as you (paginating watched films, watchlist, and likes, plus optional review-text pages). Vypode throttles these (sequential paging with delays, low-concurrency review fetching) and backs off on `429`/`503`, but a large library still means a meaningful burst of traffic. Sync only when you intend to.
+- **Account-changing actions.** Marking watched/liked/watchlist and submitting reviews write to your real Letterboxd account, using your active session. Review submission posts to a Letterboxd endpoint that is not a public, documented API, so it may change or break without notice.
+- **Your responsibility.** Use Vypode in accordance with [Letterboxd's Terms of Use](https://letterboxd.com/terms-of-use/). It is an unofficial, independent tool, not affiliated with or endorsed by Letterboxd. Use at your own risk.
 
 ## Profile Database
 
