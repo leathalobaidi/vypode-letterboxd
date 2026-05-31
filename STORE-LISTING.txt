@@ -9,7 +9,7 @@ Manifest version: 6.1.0  (must be higher than the currently published version)
 STORE LISTING TAB
 ────────────────────────────────────────────────────────────────────────
 
-NAME:
+NAME: Mando. 
 Swipe for Letterboxd
 
 SUMMARY (≤132 chars):
@@ -86,16 +86,11 @@ PERMISSION JUSTIFICATIONS
 ────────────────────────────────────────────────────────────────────────
 
 storage:
-Stores the on-device film registry (your watch history + flags) and a few filter
-preferences. No personal data leaves the device.
 
 unlimitedStorage:
-Large watch histories (thousands of films, each with review text) can exceed Chrome's
-default 5 MB local-storage quota; this lets the full database persist locally.
 
-Host access (content scripts + sync on https://letterboxd.com/*):
-The deck, database UI, and Collection Sync run on Letterboxd pages and read your own
-profile pages while you are signed in. Scope is limited to letterboxd.com.
+
+
 
 ────────────────────────────────────────────────────────────────────────
 CONTACT / LINKS  (paste into the dashboard's URL fields)
