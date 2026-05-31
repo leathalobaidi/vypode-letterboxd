@@ -20,11 +20,14 @@ test('popup uses an external script and exposes all registry stats', () => {
 });
 
 test('settings panel includes complete local database controls and no cloud backup UI', () => {
-  for (const id of ['vypodeDbSearch', 'vypodeDbFilter', 'vypodeDbSort', 'vypodeDbSummary', 'vypodeDbList']) {
+  for (const id of ['vypodeDbSearch', 'vypodeDbFilter', 'vypodeDbGenreFilter', 'vypodeDbDateFilter', 'vypodeDbSort', 'vypodeDbSummary', 'vypodeDbList']) {
     assert.match(contentJs, new RegExp(id));
   }
 
   for (const label of ['watched', 'liked', 'watchlist', 'rated', 'reviewed', 'missing-rating', 'skipped']) {
+    assert.match(contentJs, new RegExp(`value="${label}"`));
+  }
+  for (const label of ['watched-with-date', 'watched-last-30', 'watched-this-year', 'missing-watched-date', 'watchedAt']) {
     assert.match(contentJs, new RegExp(`value="${label}"`));
   }
 
@@ -72,6 +75,7 @@ test('single film state detection handles current Letterboxd action classes', ()
   assert.ok((contentJs.match(/\.action\.-like\.-on/g) || []).length >= 3);
   assert.ok((contentJs.match(/\.action\.-watchlist\.-on/g) || []).length >= 3);
   assert.doesNotMatch(contentJs, /action\.-watched\.-checked/);
+  assert.doesNotMatch(contentJs, /\?\.querySelector\([^)\n]+\) !== null/);
 });
 
 test('review submission uses current Letterboxd production-log api', () => {
@@ -95,9 +99,30 @@ test('collection sync requires the current browser session to be logged in', () 
 test('collection sync preserves true flags when records appear in multiple collections', () => {
   assert.match(contentJs, /function mergeSyncedFilmRecord/);
   assert.match(contentJs, /merged\[flag\] = Boolean\(merged\[flag\] \|\| incoming\[flag\]\)/);
+  assert.match(contentJs, /const incomplete = \[/);
+  assert.match(contentJs, /throw new Error\(`Could not complete/);
+  assert.match(contentJs, /stopped after \$\{maxPages\} pages/);
   assert.doesNotMatch(contentJs, /watched:\s*Boolean\(flags\?\.watched\)/);
   assert.doesNotMatch(contentJs, /liked:\s*Boolean\(flags\?\.liked\)/);
   assert.doesNotMatch(contentJs, /watchlist:\s*Boolean\(flags\?\.watchlist\)/);
+});
+
+test('action queue avoids misleading committed undo and warns before unload', () => {
+  assert.match(contentJs, /let activeQueueItem = null/);
+  assert.match(contentJs, /queueItem\.committed/);
+  assert.match(contentJs, /Already synced to Letterboxd/);
+  assert.match(contentJs, /queueItem\.cancelled = true/);
+  assert.match(contentJs, /beforeunload/);
+  assert.match(contentJs, /Vypode is still syncing actions to Letterboxd/);
+});
+
+test('single-film actions do not toggle already-active Letterboxd states off', () => {
+  assert.match(contentJs, /Already marked as watched/);
+  assert.match(contentJs, /Already liked/);
+  assert.match(contentJs, /Already in Watchlist/);
+  assert.match(contentJs, /if \(getStates\(\)\.isWatched\)/);
+  assert.match(contentJs, /if \(getStates\(\)\.isLiked\)/);
+  assert.match(contentJs, /if \(getStates\(\)\.inWatchlist\)/);
 });
 
 test('passive DOM enrichment never writes false or null collection flags', () => {

@@ -1,4 +1,4 @@
-// VYPODE FOR LETTERBOXD — FilmState Registry v5.0.0
+// VYPODE FOR LETTERBOXD — FilmState Registry v6.0.0
 // Persistent film state keyed by slug, stored in chrome.storage.local
 // Loaded before content.js — exposes window.VypodeFilmState
 
@@ -19,11 +19,20 @@
 
   // ── In-memory registry ──────────────────────────────────────────────
 
-  let registry = {};       // slug -> FilmEntry
+  let registry = Object.create(null);       // slug -> FilmEntry
   let meta = { version: DATA_VERSION, lastSyncAt: null, syncDuration: null, syncCounts: null };
   let prefs = { ...DEFAULT_PREFS };
   let loaded = false;
   let saveTimer = null;
+  let lastStorageError = null;
+
+  function isSafeSlug(slug) {
+    return typeof slug === 'string' &&
+      slug.length > 0 &&
+      slug !== '__proto__' &&
+      slug !== 'constructor' &&
+      slug !== 'prototype';
+  }
 
   // ── FilmEntry shape ─────────────────────────────────────────────────
 
@@ -31,6 +40,8 @@
     return {
       title: null,
       year: null,
+      director: null,
+      genres: [],
       poster: null,
       url: null,
       rating: null,
@@ -52,6 +63,20 @@
     return { ...newEntry(), ...(entry || {}) };
   }
 
+  function storageErrorMessage() {
+    return chrome.runtime?.lastError?.message || null;
+  }
+
+  function recordStorageError(scope) {
+    const message = storageErrorMessage();
+    if (!message) return;
+    lastStorageError = `${scope}: ${message}`;
+    console.warn('Vypode storage error:', lastStorageError);
+    try {
+      chrome.runtime?.sendMessage?.({ type: 'vypode', action: 'storageError', data: { scope, message } });
+    } catch (e) {}
+  }
+
   // ── Storage I/O ─────────────────────────────────────────────────────
 
   async function loadFromStorage() {
@@ -71,9 +96,10 @@
         migrateData(raw, version);
       }
       meta = raw._meta || meta;
-      registry = {};
+      registry = Object.create(null);
       const rawSlugs = raw.slugs || {};
       for (const slug in rawSlugs) {
+        if (!isSafeSlug(slug)) continue;
         registry[slug] = normalizeEntry(rawSlugs[slug]);
       }
     }
@@ -85,21 +111,83 @@
     loaded = true;
   }
 
-  function saveToStorage() {
-    // Debounced save: coalesce rapid writes into a single storage call
-    if (saveTimer) clearTimeout(saveTimer);
-    saveTimer = setTimeout(() => {
+  function timestamp(value) {
+    const time = value ? new Date(value).getTime() : 0;
+    return Number.isFinite(time) ? time : 0;
+  }
+
+  function mergeEntryForSave(storedEntry, localEntry) {
+    const stored = normalizeEntry(storedEntry);
+    const local = normalizeEntry(localEntry);
+    const merged = { ...stored };
+
+    for (const key of ['title', 'year', 'director', 'genres', 'poster', 'url', 'rating', 'ratingValue', 'reviewText', 'reviewUrl']) {
+      if (local[key] !== undefined && local[key] !== null && local[key] !== '') {
+        merged[key] = local[key];
+      }
+    }
+
+    for (const flag of ['watched', 'liked', 'watchlist', 'skipped']) {
+      const localTs = timestamp(local[flag + 'At']);
+      const storedTs = timestamp(stored[flag + 'At']);
+      if (localTs || storedTs) {
+        if (localTs >= storedTs) {
+          merged[flag] = Boolean(local[flag]);
+          merged[flag + 'At'] = local[flag + 'At'];
+        }
+      } else if (local[flag]) {
+        merged[flag] = true;
+      }
+    }
+
+    if (timestamp(local.updatedAt) >= timestamp(stored.updatedAt)) {
+      merged.lastAction = local.lastAction || merged.lastAction;
+      merged.source = local.source || merged.source;
+      merged.lastSyncedAt = local.lastSyncedAt || merged.lastSyncedAt;
+      merged.updatedAt = local.updatedAt || merged.updatedAt;
+    }
+
+    return merged;
+  }
+
+  function writeToStorage() {
+    chrome.storage.local.get([STORAGE_KEY], result => {
+      const latest = result[STORAGE_KEY];
+      const mergedRegistry = Object.create(null);
+      const latestSlugs = latest?.slugs || {};
+
+      for (const slug in latestSlugs) {
+        if (!isSafeSlug(slug)) continue;
+        mergedRegistry[slug] = normalizeEntry(latestSlugs[slug]);
+      }
+      for (const slug in registry) {
+        if (!isSafeSlug(slug)) continue;
+        mergedRegistry[slug] = mergeEntryForSave(mergedRegistry[slug], registry[slug]);
+      }
+
+      registry = mergedRegistry;
       const payload = {
-        _meta: { ...meta, version: DATA_VERSION },
+        _meta: { ...(latest?._meta || {}), ...meta, version: DATA_VERSION },
         slugs: registry
       };
-      chrome.storage.local.set({ [STORAGE_KEY]: payload });
+      chrome.storage.local.set({ [STORAGE_KEY]: payload }, () => recordStorageError('local.set'));
       saveTimer = null;
-    }, 300);
+    });
+  }
+
+  function saveToStorage(delayMs) {
+    // Debounced save: coalesce rapid writes into a single storage call
+    if (saveTimer) clearTimeout(saveTimer);
+    const delay = delayMs === undefined ? 300 : delayMs;
+    if (delay <= 0) {
+      writeToStorage();
+      return;
+    }
+    saveTimer = setTimeout(writeToStorage, delay);
   }
 
   function savePrefs() {
-    chrome.storage.sync.set({ [PREFS_KEY]: prefs });
+    chrome.storage.sync.set({ [PREFS_KEY]: prefs }, () => recordStorageError('sync.set'));
   }
 
   // ── Migration ───────────────────────────────────────────────────────
@@ -112,6 +200,10 @@
     }
     if (fromVersion < 2 && raw.slugs) {
       for (const slug in raw.slugs) {
+        if (!isSafeSlug(slug)) {
+          delete raw.slugs[slug];
+          continue;
+        }
         raw.slugs[slug] = normalizeEntry(raw.slugs[slug]);
       }
       raw._meta = raw._meta || {};
@@ -125,6 +217,8 @@
       slug,
       entry.title,
       entry.year,
+      entry.director,
+      ...(Array.isArray(entry.genres) ? entry.genres : []),
       entry.rating,
       entry.reviewText
     ].filter(Boolean).join(' ').toLowerCase();
@@ -147,6 +241,7 @@
     // ── Read ────────────────────────────────────────────────────────
 
     get(slug) {
+      if (!isSafeSlug(slug)) return null;
       return registry[slug] || null;
     },
 
@@ -155,7 +250,7 @@
     },
 
     getMeta() {
-      return { ...meta };
+      return { ...meta, lastStorageError };
     },
 
     getPrefs() {
@@ -181,6 +276,8 @@
       const opts = options || {};
       const search = (opts.search || '').trim().toLowerCase();
       const filter = opts.filter || 'all';
+      const genre = (opts.genre || 'all').trim().toLowerCase();
+      const dateFilter = opts.dateFilter || 'all';
       const sort = opts.sort || 'title';
 
       let rows = Object.entries(registry).map(([slug, entry]) => ({
@@ -196,6 +293,22 @@
       else if (filter === 'missing-rating') rows = rows.filter(e => e.watched && !e.ratingValue && !e.rating);
       else if (filter === 'skipped') rows = rows.filter(e => e.skipped);
 
+      if (genre !== 'all') {
+        rows = rows.filter(e => Array.isArray(e.genres) && e.genres.some(g => String(g).toLowerCase() === genre));
+      }
+
+      if (dateFilter === 'watched-with-date') {
+        rows = rows.filter(e => e.watched && e.watchedAt);
+      } else if (dateFilter === 'watched-last-30') {
+        const cutoff = Date.now() - 30 * 24 * 60 * 60 * 1000;
+        rows = rows.filter(e => e.watched && e.watchedAt && new Date(e.watchedAt).getTime() >= cutoff);
+      } else if (dateFilter === 'watched-this-year') {
+        const year = new Date().getFullYear();
+        rows = rows.filter(e => e.watched && e.watchedAt && new Date(e.watchedAt).getFullYear() === year);
+      } else if (dateFilter === 'missing-watched-date') {
+        rows = rows.filter(e => e.watched && !e.watchedAt);
+      }
+
       if (search) {
         rows = rows.filter(e => searchableText(e.slug, e).includes(search));
       }
@@ -207,6 +320,9 @@
         if (sort === 'updated') {
           return String(b.updatedAt || b.lastSyncedAt || '').localeCompare(String(a.updatedAt || a.lastSyncedAt || ''));
         }
+        if (sort === 'watchedAt') {
+          return String(b.watchedAt || '').localeCompare(String(a.watchedAt || '')) || String(a.title || a.slug).localeCompare(String(b.title || b.slug));
+        }
         if (sort === 'year') {
           return String(b.year || '').localeCompare(String(a.year || '')) || String(a.title || a.slug).localeCompare(String(b.title || b.slug));
         }
@@ -214,6 +330,19 @@
       });
 
       return rows;
+    },
+
+    getGenres() {
+      const genres = new Set();
+      for (const slug in registry) {
+        const entry = registry[slug];
+        if (!Array.isArray(entry?.genres)) continue;
+        for (const genre of entry.genres) {
+          const label = String(genre || '').trim();
+          if (label) genres.add(label);
+        }
+      }
+      return Array.from(genres).sort((a, b) => a.localeCompare(b));
     },
 
     // Returns true if this film should be excluded from the deck
@@ -231,6 +360,7 @@
 
     // Set a single flag on a slug. source: 'userAction' | 'domSync' | 'collectionSync' | 'import'
     setFlag(slug, flag, value, source) {
+      if (!isSafeSlug(slug)) return;
       if (!slug) return;
       const now = new Date().toISOString();
       if (!registry[slug]) registry[slug] = newEntry();
@@ -240,18 +370,19 @@
       entry.lastAction = flag;
       entry.source = source || 'userAction';
       entry.updatedAt = now;
-      saveToStorage();
+      saveToStorage(source === 'userAction' ? 0 : 300);
       // Best-effort notification for popup/test listeners.
       this._notifyBackground('stateChanged', { slug, flag, value, source: entry.source, timestamp: now });
     },
 
     updateFilm(slug, patch, source) {
+      if (!isSafeSlug(slug)) return false;
       if (!slug || !patch || typeof patch !== 'object') return false;
       const now = new Date().toISOString();
       if (!registry[slug]) registry[slug] = newEntry();
       const entry = registry[slug];
       const allowed = [
-        'title', 'year', 'poster', 'url', 'rating', 'ratingValue', 'reviewText', 'reviewUrl',
+        'title', 'year', 'director', 'genres', 'poster', 'url', 'rating', 'ratingValue', 'reviewText', 'reviewUrl',
         'watched', 'watchedAt', 'liked', 'likedAt', 'watchlist', 'watchlistAt',
         'skipped', 'skippedAt', 'lastAction'
       ];
@@ -261,7 +392,7 @@
       entry.source = source || patch.source || entry.source || 'userAction';
       entry.lastSyncedAt = patch.lastSyncedAt || entry.lastSyncedAt;
       entry.updatedAt = patch.updatedAt || now;
-      saveToStorage();
+      saveToStorage(source === 'userAction' ? 0 : 300);
       return true;
     },
 
@@ -271,10 +402,11 @@
       const now = new Date().toISOString();
       let count = 0;
       for (const slug in slugMap) {
+        if (!isSafeSlug(slug)) continue;
         if (!registry[slug]) registry[slug] = newEntry();
         const entry = registry[slug];
         const incoming = slugMap[slug];
-        const metadataKeys = ['title', 'year', 'poster', 'url', 'rating', 'ratingValue', 'reviewText', 'reviewUrl'];
+        const metadataKeys = ['title', 'year', 'director', 'genres', 'poster', 'url', 'rating', 'ratingValue', 'reviewText', 'reviewUrl'];
         for (const key of metadataKeys) {
           if (incoming[key] !== undefined && incoming[key] !== null && incoming[key] !== entry[key]) {
             entry[key] = incoming[key];
@@ -300,6 +432,7 @@
       const now = new Date().toISOString();
       let count = 0;
       for (const slug in registry) {
+        if (!isSafeSlug(slug)) continue;
         const entry = registry[slug];
         if (!entry || typeof entry !== 'object') continue;
         for (const flag of ['watched', 'liked', 'watchlist']) {
@@ -322,14 +455,16 @@
     mergeImportedRegistry(importedRegistry) {
       let merged = 0;
       for (const slug in importedRegistry) {
-        const imported = normalizeEntry(importedRegistry[slug]);
+        if (!isSafeSlug(slug)) continue;
+        const rawImported = importedRegistry[slug] || {};
+        const imported = normalizeEntry(rawImported);
         if (!registry[slug]) {
           registry[slug] = { ...newEntry(), ...imported, source: 'import' };
           merged++;
           continue;
         }
         const local = registry[slug];
-        for (const key of ['title', 'year', 'poster', 'url', 'rating', 'ratingValue', 'reviewText', 'reviewUrl']) {
+        for (const key of ['title', 'year', 'director', 'genres', 'poster', 'url', 'rating', 'ratingValue', 'reviewText', 'reviewUrl']) {
           if (imported[key] && imported[key] !== local[key]) {
             local[key] = imported[key];
             merged++;
@@ -338,8 +473,11 @@
         for (const flag of ['watched', 'liked', 'watchlist', 'skipped']) {
           const importedTs = imported[flag + 'At'];
           const localTs = local[flag + 'At'];
-          if (importedTs && (!localTs || importedTs > localTs)) {
-            local[flag] = imported[flag];
+          if (Object.prototype.hasOwnProperty.call(rawImported, flag) &&
+              typeof rawImported[flag] === 'boolean' &&
+              importedTs &&
+              (!localTs || importedTs > localTs)) {
+            local[flag] = rawImported[flag];
             local[flag + 'At'] = importedTs;
             local.source = 'import';
             merged++;
@@ -419,6 +557,7 @@
 
     async clearSkipped() {
       for (const slug in registry) {
+        if (!isSafeSlug(slug)) continue;
         if (registry[slug].skipped) {
           registry[slug].skipped = false;
           registry[slug].skippedAt = null;
@@ -441,6 +580,18 @@
       } catch (e) {
         // Background may not be running — that's fine
       }
+    },
+
+    flush() {
+      if (saveTimer) {
+        clearTimeout(saveTimer);
+        saveTimer = null;
+      }
+      writeToStorage();
+    },
+
+    getLastStorageError() {
+      return lastStorageError;
     }
   };
 

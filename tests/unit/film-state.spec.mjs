@@ -42,8 +42,10 @@ function createStorageArea(initial = {}) {
   };
 }
 
-function createFilmStateRuntime(localInitial = {}, syncInitial = {}) {
+function createFilmStateRuntime(localInitial = {}, syncInitial = {}, sharedAreas = null) {
   const sentMessages = [];
+  const localArea = sharedAreas?.local || createStorageArea(localInitial);
+  const syncArea = sharedAreas?.sync || createStorageArea(syncInitial);
   const context = {
     console,
     setTimeout,
@@ -51,8 +53,8 @@ function createFilmStateRuntime(localInitial = {}, syncInitial = {}) {
     window: {},
     chrome: {
       storage: {
-        local: createStorageArea(localInitial),
-        sync: createStorageArea(syncInitial)
+        local: localArea,
+        sync: syncArea
       },
       runtime: {
         sendMessage(message) {
@@ -66,8 +68,8 @@ function createFilmStateRuntime(localInitial = {}, syncInitial = {}) {
   vm.runInContext(filmStateSource, context, { filename: filmStatePath });
   return {
     api: context.window.VypodeFilmState,
-    localStore: context.chrome.storage.local.store,
-    syncStore: context.chrome.storage.sync.store,
+    localStore: localArea.store,
+    syncStore: syncArea.store,
     sentMessages
   };
 }
@@ -87,21 +89,31 @@ test('tracks metadata, ratings, reviews, filters, and search', async () => {
   api.updateFilm('amelie', {
     title: 'Amelie',
     year: '2001',
+    director: 'Jean-Pierre Jeunet',
+    genres: ['Romance', 'Comedy'],
     poster: 'https://example.test/amelie.jpg',
     ratingValue: 4.5,
     reviewText: 'warm city magic',
     watched: true,
+    watchedAt: new Date().toISOString(),
     liked: true
   }, 'collectionSync');
   api.updateFilm('unrated-watch', {
     title: 'Unrated Watch',
+    genres: ['Drama'],
     watched: true
+  }, 'collectionSync');
+  api.updateFilm('recent-drama', {
+    title: 'Recent Drama',
+    genres: ['Drama'],
+    watched: true,
+    watchedAt: new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()
   }, 'collectionSync');
   api.setFlag('skipped-film', 'skipped', true, 'userAction');
 
   const stats = api.getStats();
-  assert.equal(stats.total, 3);
-  assert.equal(stats.watched, 2);
+  assert.equal(stats.total, 4);
+  assert.equal(stats.watched, 3);
   assert.equal(stats.liked, 1);
   assert.equal(stats.skipped, 1);
   assert.equal(stats.rated, 1);
@@ -109,8 +121,14 @@ test('tracks metadata, ratings, reviews, filters, and search', async () => {
 
   assert.deepEqual(plain(api.query({ filter: 'rated' }).map(row => row.slug)), ['amelie']);
   assert.deepEqual(plain(api.query({ filter: 'reviewed' }).map(row => row.slug)), ['amelie']);
-  assert.deepEqual(plain(api.query({ filter: 'missing-rating' }).map(row => row.slug)), ['unrated-watch']);
+  assert.deepEqual(plain(api.query({ filter: 'missing-rating' }).map(row => row.slug)), ['recent-drama', 'unrated-watch']);
   assert.deepEqual(plain(api.query({ search: 'city magic' }).map(row => row.slug)), ['amelie']);
+  assert.deepEqual(plain(api.query({ search: 'jeunet' }).map(row => row.slug)), ['amelie']);
+  assert.deepEqual(plain(api.query({ genre: 'Drama' }).map(row => row.slug)), ['recent-drama', 'unrated-watch']);
+  assert.deepEqual(plain(api.query({ dateFilter: 'watched-with-date' }).map(row => row.slug).sort()), ['amelie', 'recent-drama']);
+  assert.deepEqual(plain(api.query({ dateFilter: 'watched-last-30' }).map(row => row.slug).sort()), ['amelie', 'recent-drama']);
+  assert.deepEqual(plain(api.query({ dateFilter: 'missing-watched-date' }).map(row => row.slug)), ['unrated-watch']);
+  assert.deepEqual(plain(api.getGenres()), ['Comedy', 'Drama', 'Romance']);
   assert.equal(api.shouldExclude('amelie'), true);
 });
 
@@ -147,6 +165,20 @@ test('bulk sync merges rich Letterboxd records and reconciles stale collection f
   assert.equal(api.get('old-watch').watched, false);
 });
 
+test('separate content-script registries merge storage writes instead of clobbering', async () => {
+  const sharedAreas = { local: createStorageArea(), sync: createStorageArea() };
+  const tabA = createFilmStateRuntime({}, {}, sharedAreas);
+  const tabB = createFilmStateRuntime({}, {}, sharedAreas);
+  await Promise.all([tabA.api.init(), tabB.api.init()]);
+
+  tabA.api.updateFilm('arrival', { title: 'Arrival', watched: true }, 'userAction');
+  tabB.api.updateFilm('moonlight', { title: 'Moonlight', liked: true }, 'userAction');
+  await waitForDebounce();
+
+  assert.equal(sharedAreas.local.store.vypode_state.slugs.arrival.watched, true);
+  assert.equal(sharedAreas.local.store.vypode_state.slugs.moonlight.liked, true);
+});
+
 test('imports exported data by timestamp without cloud dependencies', async () => {
   const { api } = createFilmStateRuntime();
   await api.init();
@@ -178,6 +210,37 @@ test('imports exported data by timestamp without cloud dependencies', async () =
   assert.equal(api.get('moonlight').reviewText, 'imported note');
   assert.equal(api.get('moonlight').source, 'import');
   assert.equal(api.getPrefs().excludeLiked, false);
+});
+
+test('rejects unsafe import slugs and does not apply missing flag booleans', async () => {
+  const { api } = createFilmStateRuntime();
+  await api.init();
+
+  api.updateFilm('moonlight', {
+    title: 'Moonlight',
+    watched: true,
+    watchedAt: '2026-01-01T00:00:00.000Z',
+    updatedAt: '2026-01-01T00:00:00.000Z'
+  }, 'collectionSync');
+
+  const result = api.importData(`{
+    "slugs": {
+      "__proto__": { "title": "Prototype", "watched": true },
+      "constructor": { "title": "Constructor", "watched": true },
+      "moonlight": {
+        "title": "Moonlight",
+        "watchedAt": "2027-01-01T00:00:00.000Z",
+        "updatedAt": "2027-01-01T00:00:00.000Z"
+      }
+    }
+  }`);
+
+  assert.equal(result.success, true);
+  assert.equal(api.get('__proto__'), null);
+  assert.equal(api.get('constructor'), null);
+  assert.equal({}.watched, undefined);
+  assert.equal(api.get('moonlight').watched, true);
+  assert.equal(api.get('moonlight').watchedAt, '2026-01-01T00:00:00.000Z');
 });
 
 test('clearAll removes local registry and synced preferences', async () => {

@@ -1,8 +1,8 @@
-# Vypode for Letterboxd v5.0
+# Vypode for Letterboxd v6.0
 
 A Chrome extension that adds a swipe-style interface and a local profile database for Letterboxd. It helps you move through films quickly, hide titles you have already handled, and search your own watched history by title, rating, liked status, and review text where Letterboxd exposes it.
 
-## What's New in v5.0
+## What's New in v6.0
 
 - **Fresh poster filtering** — Deck mode hides films you have already watched, liked, added to watchlist, or skipped.
 - **Local profile database** — Collection Sync builds a device-local registry of watched films with titles, posters, ratings, likes, and available review text.
@@ -149,7 +149,7 @@ Make sure you are logged into Letterboxd. Vypode keeps the review panel open so 
 
 ## Migration from v4.0
 
-v5.0 preserves older local film state and upgrades entries as they are loaded. Run Collection Sync after installing to populate the richer profile database.
+v6.0 preserves older local film state and upgrades entries as they are loaded. Run Collection Sync after installing to populate the richer profile database.
 
 ---
 

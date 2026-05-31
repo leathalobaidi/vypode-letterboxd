@@ -1,6 +1,6 @@
-// VYPODE FOR LETTERBOXD — Content Script v5.0.0
+// VYPODE FOR LETTERBOXD — Content Script v6.0.0
 // Background actions + auto-advance + auto-next-page + Voice Review + Star Rating
-// v5.0.0: FilmState registry, fresh poster filtering, durable skip,
+// v6.0.0: FilmState registry, fresh poster filtering, durable skip,
 //         account awareness, collection sync, settings panel, local profile database
 (function() {
   'use strict';
@@ -22,6 +22,7 @@
   // Background action queue — lets user swipe instantly while Letterboxd syncs
   let actionQueue = [];
   let isProcessingQueue = false;
+  let activeQueueItem = null;
 
   // Review & Rating state
   let reviewPanelVisible = false;
@@ -48,6 +49,7 @@
     likedState: '.action.-like.-checked, .action.-like.-on, .icon-like.-on, .film-like-link-target.icon-like.-on',
     watchlistState: '.action.-watchlist.-checked, .action.-watchlist.-on, .icon-watchlist.-on, .film-watch-list-link-target.icon-watchlist.-on, .remove-from-watchlist'
   };
+  const EMPTY_POSTER_URL = 'https://letterboxd.com/static/img/empty-poster-230.c6baa486.png';
 
   // ── HTML escaping ───────────────────────────────────────────────────
 
@@ -81,6 +83,21 @@
       .replace(/-\d+-\d+-\d+-\d+-crop/, '-0-460-0-690-crop');
   }
 
+  function attachPosterFallback(img) {
+    if (!img || img.dataset.vypodeFallbackAttached) return;
+    img.dataset.vypodeFallbackAttached = 'true';
+    img.addEventListener('error', function() {
+      if (this.src !== EMPTY_POSTER_URL) this.src = EMPTY_POSTER_URL;
+    });
+  }
+
+  function setPosterImage(img, src, alt) {
+    if (!img) return;
+    attachPosterFallback(img);
+    img.alt = alt || '';
+    img.src = src || EMPTY_POSTER_URL;
+  }
+
   function titleWithoutPosterPrefix(value, fallback) {
     return (value || fallback || 'Unknown Film').replace(/^Poster for /i, '').trim();
   }
@@ -109,6 +126,8 @@
     const metadata = {
       title: film.title,
       year: film.year || parseYearFromTitle(film.title),
+      director: film.director,
+      genres: Array.isArray(film.genres) ? film.genres : undefined,
       poster: film.poster,
       url: film.url,
       rating: film.rating,
@@ -294,9 +313,9 @@
         const ratingValue = parseRatingValue(ratingEl);
 
         const overlay = filmPoster.querySelector('.film-poster-overlay, .overlay');
-        const isWatched = overlay?.querySelector('.icon-watched.-on, .action.-watch.-checked, .action.-watch.-on') !== null;
-        const isLiked = overlay?.querySelector('.icon-like.-on, .action.-like.-checked, .action.-like.-on') !== null;
-        const inWatchlist = overlay?.querySelector('.icon-watchlist.-on, .action.-watchlist.-checked, .action.-watchlist.-on, .remove-from-watchlist') !== null;
+        const isWatched = Boolean(overlay?.querySelector('.icon-watched.-on, .action.-watch.-checked, .action.-watch.-on'));
+        const isLiked = Boolean(overlay?.querySelector('.icon-like.-on, .action.-like.-checked, .action.-like.-on'));
+        const inWatchlist = Boolean(overlay?.querySelector('.icon-watchlist.-on, .action.-watchlist.-checked, .action.-watchlist.-on, .remove-from-watchlist'));
 
         // Update FilmState from DOM overlay states
         if (window.VypodeFilmState) {
@@ -352,6 +371,7 @@
       film.director = doc.querySelector('.contributor a')?.textContent?.trim() || '';
       const genreEls = doc.querySelectorAll('.text-sluglist a[href*="/films/genre/"]');
       film.genres = Array.from(genreEls).slice(0, 3).map(el => el.textContent.trim());
+      persistFilmRecord(film, 'domSync');
 
       // Update the card if it's still the one being displayed
       if (filmDeck[currentDeckIndex] === film) {
@@ -384,26 +404,7 @@
                      document.querySelector('a[rel="next"]') ||
                      document.querySelector('.pagination a.next');
     if (nextLink?.href) return nextLink.href;
-    // Fallback: infer /page/N/ from current URL (Letterboxd listing pattern)
-    return inferNextPageUrl(window.location.href);
-  }
-
-  function inferNextPageUrl(href) {
-    try {
-      const u = new URL(href);
-      const m = u.pathname.match(/^(.*?)\/page\/(\d+)\/?$/);
-      if (m) {
-        u.pathname = `${m[1]}/page/${parseInt(m[2], 10) + 1}/`;
-        return u.toString();
-      }
-      // No /page/N/ — assume current is page 1, jump to page 2
-      u.pathname = u.pathname.replace(/\/$/, '') + '/page/2/';
-      return u.toString();
-    } catch { return null; }
-  }
-
-  function inferNextPageUrlFromDoc(fetchedUrl) {
-    return inferNextPageUrl(fetchedUrl);
+    return null;
   }
 
   // ── Action buttons (single film page) ──────────────────────────────
@@ -426,40 +427,64 @@
 
   function performWatch() {
     if (!requireActiveLetterboxdSession('mark films as watched')) return false;
+    if (isProcessingAction) return false;
+    if (getStates().isWatched) {
+      showFeedback('Already marked as watched', 'watch');
+      return false;
+    }
+    isProcessingAction = true;
     const buttons = findButtons();
     if (buttons.watchBtn) {
       buttons.watchBtn.click();
       const slug = window.location.pathname.match(/\/film\/([^\/]+)/)?.[1];
       if (slug && window.VypodeFilmState) window.VypodeFilmState.setFlag(slug, 'watched', true, 'userAction');
       showFeedback('Marked as watched!', 'watch');
+      setTimeout(() => { isProcessingAction = false; refreshStates(); }, 500);
       return true;
     }
+    isProcessingAction = false;
     showFeedback('Could not find watch button', 'error'); return false;
   }
 
   function performLike() {
     if (!requireActiveLetterboxdSession('like films')) return false;
+    if (isProcessingAction) return false;
+    if (getStates().isLiked) {
+      showFeedback('Already liked', 'like');
+      return false;
+    }
+    isProcessingAction = true;
     const buttons = findButtons();
     if (buttons.likeBtn) {
       buttons.likeBtn.click();
       const slug = window.location.pathname.match(/\/film\/([^\/]+)/)?.[1];
       if (slug && window.VypodeFilmState) window.VypodeFilmState.setFlag(slug, 'liked', true, 'userAction');
       showFeedback('Liked!', 'like');
+      setTimeout(() => { isProcessingAction = false; refreshStates(); }, 500);
       return true;
     }
+    isProcessingAction = false;
     showFeedback('Could not find like button', 'error'); return false;
   }
 
   function performWatchlist() {
     if (!requireActiveLetterboxdSession('add films to your watchlist')) return false;
+    if (isProcessingAction) return false;
+    if (getStates().inWatchlist) {
+      showFeedback('Already in Watchlist', 'watchlist');
+      return false;
+    }
+    isProcessingAction = true;
     const buttons = findButtons();
     if (buttons.watchlistBtn) {
       buttons.watchlistBtn.click();
       const slug = window.location.pathname.match(/\/film\/([^\/]+)/)?.[1];
       if (slug && window.VypodeFilmState) window.VypodeFilmState.setFlag(slug, 'watchlist', true, 'userAction');
       showFeedback('Added to Watchlist!', 'watchlist');
+      setTimeout(() => { isProcessingAction = false; refreshStates(); }, 500);
       return true;
     }
+    isProcessingAction = false;
     showFeedback('Could not find watchlist button', 'error'); return false;
   }
 
@@ -467,7 +492,11 @@
 
   function cleanupIframe() {
     if (iframeTimeout) { clearTimeout(iframeTimeout); iframeTimeout = null; }
+    if (activeQueueItem) activeQueueItem.cancelled = true;
+    actionQueue = [];
     if (actionIframe) { actionIframe.remove(); actionIframe = null; }
+    activeQueueItem = null;
+    isProcessingQueue = false;
     isProcessingAction = false;
   }
 
@@ -486,6 +515,11 @@
     const flagMap = { watch: 'watched', like: 'liked', watchlist: 'watchlist' };
     const dirMap = { watch: 'left', like: 'up', watchlist: 'right' };
     const previousValue = action === 'watch' ? film.isWatched : action === 'like' ? film.isLiked : film.inWatchlist;
+    if (previousValue) {
+      showFeedback(action === 'watch' ? 'Already watched' : action === 'like' ? 'Already liked' : 'Already in Watchlist', action);
+      isProcessingAction = false;
+      return;
+    }
 
     // Optimistic update — mark film and persist immediately so the user
     // can keep swiping without waiting for Letterboxd to respond.
@@ -500,8 +534,23 @@
 
     const messages = { watch: 'Marked as watched!', like: 'Liked!', watchlist: 'Added to Watchlist!' };
 
-    // Show undo toast — user has 5s to reverse
+    const queueItem = { filmUrl, action, retries: 0, slug: film.slug, previousValue, committed: false, cancelled: false };
+
+    // Show undo toast — user has 5s to reverse if the remote action has not already committed.
     showUndoToast(messages[action], action, () => {
+      if (queueItem.committed) {
+        showFeedback('Already synced to Letterboxd', 'watchlist');
+        return;
+      }
+      const qIdx = actionQueue.indexOf(queueItem);
+      if (qIdx !== -1) {
+        actionQueue.splice(qIdx, 1);
+      } else if (activeQueueItem === queueItem) {
+        queueItem.cancelled = true;
+      } else {
+        showFeedback('Already synced to Letterboxd', 'watchlist');
+        return;
+      }
       // Undo: revert optimistic state
       if (action === 'watch') film.isWatched = false;
       else if (action === 'like') film.isLiked = false;
@@ -510,9 +559,6 @@
       if (film.slug && window.VypodeFilmState) {
         window.VypodeFilmState.setFlag(film.slug, flagMap[action], false, 'userAction');
       }
-      // Remove from action queue if still pending
-      const qIdx = actionQueue.findIndex(q => q.filmUrl === filmUrl && q.action === action);
-      if (qIdx !== -1) actionQueue.splice(qIdx, 1);
       // Go back to the undone card
       currentDeckIndex = prevIndex;
       updateDeckCard();
@@ -521,7 +567,7 @@
     });
 
     // Queue the actual Letterboxd action (non-blocking)
-    actionQueue.push({ filmUrl, action, retries: 0, slug: film.slug, previousValue });
+    actionQueue.push(queueItem);
     processActionQueue();
 
     // Visual flyoff + next-card rise, parallel with action queue
@@ -550,17 +596,31 @@
 
     const item = actionQueue.shift();
     const { filmUrl, action, retries = 0 } = item;
+    activeQueueItem = item;
 
     const iframe = document.createElement('iframe');
     iframe.style.cssText = 'position:fixed;top:-9999px;left:-9999px;width:1px;height:1px;opacity:0;pointer-events:none;';
     document.body.appendChild(iframe);
+    actionIframe = iframe;
+
+    const finishQueueItem = () => {
+      if (actionIframe === iframe) actionIframe = null;
+      if (iframeTimeout === timeout) iframeTimeout = null;
+      if (activeQueueItem === item) activeQueueItem = null;
+      isProcessingQueue = false;
+      processActionQueue();
+    };
 
     const onFail = () => {
       iframe.remove();
+      if (actionIframe === iframe) actionIframe = null;
+      if (iframeTimeout === timeout) iframeTimeout = null;
+      if (activeQueueItem === item) activeQueueItem = null;
       // Retry up to 3 times with increasing delay
       if (retries < 3) {
         setTimeout(() => {
-          actionQueue.push({ ...item, retries: retries + 1 });
+          item.retries = retries + 1;
+          actionQueue.push(item);
           isProcessingQueue = false;
           processActionQueue();
         }, (retries + 1) * 1000);
@@ -568,30 +628,36 @@
         console.warn('Vypode: action failed after 3 retries', action, filmUrl);
         rollbackFailedAction(item);
         showFeedback('Letterboxd action failed; local change rolled back', 'error');
-        isProcessingQueue = false;
-        processActionQueue();
+        finishQueueItem();
       }
     };
 
     const timeout = setTimeout(() => {
       onFail();
     }, 10000);
+    iframeTimeout = timeout;
 
     iframe.onload = function() {
       try {
         const iframeDoc = iframe.contentDocument || iframe.contentWindow.document;
 
         setTimeout(() => {
+          if (item.cancelled) {
+            clearTimeout(timeout);
+            iframe.remove();
+            finishQueueItem();
+            return;
+          }
           const selectorMap = { watch: SELECTORS.watch, like: SELECTORS.like, watchlist: SELECTORS.watchlist };
           const btn = iframeDoc.querySelector(selectorMap[action]);
 
           if (btn) {
             btn.click();
+            item.committed = true;
             setTimeout(() => {
               clearTimeout(timeout);
               iframe.remove();
-              isProcessingQueue = false;
-              processActionQueue();
+              finishQueueItem();
             }, 300);
           } else {
             clearTimeout(timeout);
@@ -801,11 +867,7 @@
       if (nextLink) {
         const href = nextLink.getAttribute('href');
         currentNextPageUrl = href.startsWith('http') ? href : 'https://letterboxd.com' + href;
-      } else if (newFilms.length > 0) {
-        // Page has films but no DOM next-link — infer from the fetched URL
-        currentNextPageUrl = inferNextPageUrlFromDoc(url);
       } else {
-        // Empty page = real end of pagination
         currentNextPageUrl = null;
       }
 
@@ -871,9 +933,9 @@
           director: '', genres: [],
           url: absoluteLetterboxdUrl(href),
           slug: filmSlug,
-          isWatched: overlay?.querySelector('.icon-watched.-on, .action.-watch.-checked, .action.-watch.-on') !== null,
-          isLiked: overlay?.querySelector('.icon-like.-on, .action.-like.-checked, .action.-like.-on') !== null,
-          inWatchlist: overlay?.querySelector('.icon-watchlist.-on, .action.-watchlist.-checked, .action.-watchlist.-on, .remove-from-watchlist') !== null,
+          isWatched: Boolean(overlay?.querySelector('.icon-watched.-on, .action.-watch.-checked, .action.-watch.-on')),
+          isLiked: Boolean(overlay?.querySelector('.icon-like.-on, .action.-like.-checked, .action.-like.-on')),
+          inWatchlist: Boolean(overlay?.querySelector('.icon-watchlist.-on, .action.-watchlist.-checked, .action.-watchlist.-on, .remove-from-watchlist')),
           actioned: false
         };
         persistFilmRecord(film, 'domSync');
@@ -1007,11 +1069,24 @@
     try {
       const results = { watched: 0, watchlist: 0, liked: 0, reviewed: 0 };
 
-      const [watchedFilms, watchlistFilms, likedFilms] = await Promise.all([
+      const [watchedResult, watchlistResult, likedResult] = await Promise.all([
         fetchAllCollectionFilms(`/${letterboxdUsername}/films/`, { watched: true }),
         fetchAllCollectionFilms(`/${letterboxdUsername}/watchlist/`, { watchlist: true }),
         fetchAllCollectionFilms(`/${letterboxdUsername}/likes/films/`, { liked: true })
       ]);
+
+      const incomplete = [
+        ['watched films', watchedResult],
+        ['watchlist', watchlistResult],
+        ['liked films', likedResult]
+      ].find(([, result]) => !result.complete);
+      if (incomplete) {
+        throw new Error(`Could not complete ${incomplete[0]} sync: ${incomplete[1].error || 'partial fetch'}`);
+      }
+
+      const watchedFilms = watchedResult.films;
+      const watchlistFilms = watchlistResult.films;
+      const likedFilms = likedResult.films;
       results.watched = watchedFilms.length;
       results.watchlist = watchlistFilms.length;
       results.liked = likedFilms.length;
@@ -1056,7 +1131,7 @@
   async function fetchAllCollectionFilms(basePath, flags) {
     const films = new Map();
     let page = 1;
-    const maxPages = 100; // Safety cap: 100 pages x 72 films = 7,200 films max
+    const maxPages = 250; // Safety cap: 250 pages x 72 films = 18,000 films max
 
     while (page <= maxPages) {
       const url = `https://letterboxd.com${basePath}page/${page}/`;
@@ -1065,7 +1140,13 @@
 
       try {
         const response = await fetchWithTimeout(url, { credentials: 'same-origin' }, 15000);
-        if (!response.ok) break;
+        if (!response.ok) {
+          return {
+            films: Array.from(films.values()),
+            complete: false,
+            error: `HTTP ${response.status} on page ${page}`
+          };
+        }
 
         const html = await response.text();
         const doc = new DOMParser().parseFromString(html, 'text/html');
@@ -1079,25 +1160,37 @@
           foundOnPage++;
         }
 
-        if (foundOnPage === 0) break;
+        if (foundOnPage === 0) {
+          return { films: Array.from(films.values()), complete: true };
+        }
 
         const hasNext = doc.querySelector('.paginate-nextprev a.next') ||
                         doc.querySelector('a[rel="next"]');
-        if (!hasNext) break;
+        if (!hasNext) {
+          return { films: Array.from(films.values()), complete: true };
+        }
 
         page++;
       } catch (e) {
         console.warn('Vypode sync: failed to fetch page', page, e);
-        break;
+        return {
+          films: Array.from(films.values()),
+          complete: false,
+          error: e.message || `failed page ${page}`
+        };
       }
     }
 
-    return Array.from(films.values());
+    return {
+      films: Array.from(films.values()),
+      complete: false,
+      error: `stopped after ${maxPages} pages with more pages remaining`
+    };
   }
 
   function mergeSyncedFilmRecord(existing, incoming) {
     const merged = { ...(existing || {}) };
-    for (const key of ['slug', 'title', 'year', 'poster', 'url', 'rating', 'ratingValue', 'reviewText', 'reviewUrl']) {
+    for (const key of ['slug', 'title', 'year', 'director', 'genres', 'poster', 'url', 'rating', 'ratingValue', 'reviewText', 'reviewUrl', 'watchedAt']) {
       if (incoming[key] !== undefined && incoming[key] !== null && incoming[key] !== '') {
         merged[key] = incoming[key];
       }
@@ -1521,9 +1614,20 @@
               <option value="missing-rating">Missing rating</option>
               <option value="skipped">Skipped</option>
             </select>
+            <select id="vypodeDbGenreFilter">
+              <option value="all">All genres</option>
+            </select>
+            <select id="vypodeDbDateFilter">
+              <option value="all">Any watch date</option>
+              <option value="watched-with-date">Has watch date</option>
+              <option value="watched-last-30">Last 30 days</option>
+              <option value="watched-this-year">This year</option>
+              <option value="missing-watched-date">Missing watch date</option>
+            </select>
             <select id="vypodeDbSort">
               <option value="title">Title A-Z</option>
               <option value="rating">Rating high-low</option>
+              <option value="watchedAt">Watch date newest</option>
               <option value="year">Year newest</option>
               <option value="updated">Recently updated</option>
             </select>
@@ -1544,7 +1648,7 @@
           <input type="file" id="vypodeImportFile" accept=".json" style="display:none">
         </div>
 
-        <div class="vypode-settings-footer">Vypode v5.0.0</div>
+        <div class="vypode-settings-footer">Vypode v6.0.0</div>
       </div>
     `;
 
@@ -1560,6 +1664,13 @@
       toggle.addEventListener('change', () => {
         const pref = toggle.dataset.pref;
         window.VypodeFilmState?.setPref(pref, toggle.checked);
+        if (isListingPage) {
+          const currentSlug = filmDeck[currentDeckIndex]?.slug;
+          filmDeck = filterFilmDeck(getFilmsFromListing());
+          currentDeckIndex = Math.max(0, filmDeck.findIndex(film => film.slug === currentSlug));
+          if (filmDeck.length > 0) updateDeckCard();
+          else showFeedback('Current page has no films matching these filters', 'watchlist');
+        }
       });
     });
 
@@ -1668,18 +1779,50 @@
   }
 
   function bindDatabaseControls() {
-    for (const id of ['vypodeDbSearch', 'vypodeDbFilter', 'vypodeDbSort']) {
+    for (const id of ['vypodeDbSearch', 'vypodeDbFilter', 'vypodeDbGenreFilter', 'vypodeDbDateFilter', 'vypodeDbSort']) {
       document.getElementById(id)?.addEventListener('input', renderDatabaseBrowser);
       document.getElementById(id)?.addEventListener('change', renderDatabaseBrowser);
     }
   }
 
+  function controlValue(id, fallback) {
+    const el = document.getElementById(id);
+    if (!el) return fallback;
+    const options = Array.from(el.options || []);
+    const selected = options.find(option => option.selected);
+    return el.value || selected?.value || options[el.selectedIndex]?.value || fallback;
+  }
+
   function databaseOptions() {
     return {
       search: document.getElementById('vypodeDbSearch')?.value || '',
-      filter: document.getElementById('vypodeDbFilter')?.value || 'all',
-      sort: document.getElementById('vypodeDbSort')?.value || 'title'
+      filter: controlValue('vypodeDbFilter', 'all'),
+      genre: controlValue('vypodeDbGenreFilter', 'all'),
+      dateFilter: controlValue('vypodeDbDateFilter', 'all'),
+      sort: controlValue('vypodeDbSort', 'title')
     };
+  }
+
+  function renderGenreOptions() {
+    const select = document.getElementById('vypodeDbGenreFilter');
+    if (!select || !window.VypodeFilmState?.getGenres) return;
+    const current = select.value || 'all';
+    const genres = window.VypodeFilmState.getGenres();
+    select.innerHTML = '<option value="all">All genres</option>' + genres.map(genre => {
+      const safe = escapeHtml(genre);
+      return `<option value="${safe}">${safe}</option>`;
+    }).join('');
+    const nextValue = genres.includes(current) ? current : 'all';
+    Array.from(select.options).forEach(option => {
+      option.selected = option.value === nextValue;
+    });
+  }
+
+  function formatStoredDate(isoString) {
+    if (!isoString) return '';
+    const date = new Date(isoString);
+    if (Number.isNaN(date.getTime())) return '';
+    return date.toISOString().slice(0, 10);
   }
 
   function renderDatabaseBrowser() {
@@ -1687,6 +1830,7 @@
     const summary = document.getElementById('vypodeDbSummary');
     if (!list || !summary || !window.VypodeFilmState?.query) return;
 
+    renderGenreOptions();
     const rows = window.VypodeFilmState.query(databaseOptions());
     const visible = rows.slice(0, 80);
     summary.textContent = rows.length
@@ -1697,6 +1841,10 @@
       const title = escapeHtml(film.title || film.slug);
       const year = film.year ? ` <span>${escapeHtml(film.year)}</span>` : '';
       const rating = film.ratingValue ? `${film.ratingValue}/5` : (film.rating ? escapeHtml(film.rating) : 'No rating');
+      const watchedDate = formatStoredDate(film.watchedAt);
+      const genres = Array.isArray(film.genres) && film.genres.length
+        ? ` • ${escapeHtml(film.genres.slice(0, 2).join(', '))}`
+        : '';
       const badges = [
         film.watched ? 'Watched' : null,
         film.liked ? 'Liked' : null,
@@ -1711,13 +1859,14 @@
           ${poster}
           <span class="vypode-db-main">
             <strong>${title}${year}</strong>
-            <small>${escapeHtml(rating)}</small>
+            <small>${escapeHtml(rating)}${watchedDate ? ` • Watched ${escapeHtml(watchedDate)}` : ''}${genres}</small>
             <span class="vypode-db-badges">${badges}</span>
           </span>
         </button>
       `;
     }).join('');
 
+    list.querySelectorAll('img').forEach(attachPosterFallback);
     list.querySelectorAll('.vypode-db-row').forEach(row => {
       row.addEventListener('click', () => showDatabaseDetail(row.dataset.slug));
     });
@@ -1738,6 +1887,9 @@
         <div>
           <h4>${escapeHtml(film.title || slug)}${film.year ? ` <span>${escapeHtml(film.year)}</span>` : ''}</h4>
           <p>${film.ratingValue ? `Your rating: ${film.ratingValue}/5` : 'No rating stored'}</p>
+          ${film.director ? `<p>Director: ${escapeHtml(film.director)}</p>` : ''}
+          ${Array.isArray(film.genres) && film.genres.length ? `<p>Genres: ${escapeHtml(film.genres.join(', '))}</p>` : ''}
+          ${formatStoredDate(film.watchedAt) ? `<p>Watched date: ${escapeHtml(formatStoredDate(film.watchedAt))}</p>` : ''}
           <p>${film.liked ? 'Liked' : 'Not liked'} &bull; ${film.watched ? 'Watched' : 'Not watched'}</p>
           ${film.reviewText ? `<blockquote>${escapeHtml(film.reviewText)}</blockquote>` : '<p>No review text stored.</p>'}
           ${film.url ? `<a href="${escapeHtml(film.url)}" target="_blank" rel="noopener noreferrer">Open film page</a>` : ''}
@@ -1745,6 +1897,7 @@
       </div>
     `;
     document.body.appendChild(detail);
+    detail.querySelectorAll('img').forEach(attachPosterFallback);
     detail.querySelector('.vypode-db-detail-close').addEventListener('click', () => detail.remove());
   }
 
@@ -1884,11 +2037,8 @@
 
     // Poster fallback (current card only)
     const posterImg = overlay.querySelector('#vypodeCard .vypode-card-bg');
-    if (posterImg) {
-      posterImg.addEventListener('error', function() {
-        this.src = 'https://letterboxd.com/static/img/empty-poster-230.c6baa486.png';
-      }, { once: true });
-    }
+    setPosterImage(posterImg, film.poster, film.title);
+    setPosterImage(overlay.querySelector('#vypodeCardNext .vypode-card-bg'), '', '');
 
     setupEventListeners(isDeck);
     vypodeVisible = true;
@@ -1919,8 +2069,7 @@
     if (!film) { next.style.visibility = 'hidden'; return; }
     next.style.visibility = '';
     const bg = next.querySelector('.vypode-card-bg');
-    bg.src = film.poster || '';
-    bg.alt = film.title || '';
+    setPosterImage(bg, film.poster, film.title);
     const title = next.querySelector('.vypode-card-title');
     if (title) title.textContent = film.title || '';
   }
@@ -1929,8 +2078,7 @@
     const card = document.getElementById('vypodeCard');
     if (!card || !film) return;
     const bg = card.querySelector('.vypode-card-bg');
-    bg.src = film.poster;
-    bg.alt = film.title;
+    setPosterImage(bg, film.poster, film.title);
     card.querySelector('.vypode-card-title').textContent = film.title;
     const metaEl = card.querySelector('.vypode-card-meta');
     metaEl.innerHTML = `
@@ -2307,17 +2455,25 @@
     btn.className = 'vypode-toggle-btn';
     btn.textContent = pageType === 'listing' ? 'Vypode Deck' : 'Vypode';
     btn.title = pageType === 'listing' ? 'Browse films with Vypode swipe deck' : 'Open Vypode swipe interface';
-    btn.addEventListener('click', () => {
+    btn.onclick = () => {
       if (vypodeVisible) {
         hideVypode();
       } else {
-        if (pageType === 'listing') {
-          createVypodeDeckUI();
-        } else {
-          createVypodeUI();
+        try {
+          if (pageType === 'listing') {
+            Promise.resolve(createVypodeDeckUI()).catch(e => {
+              console.warn('Vypode deck failed:', e);
+              showFeedback('Could not open Vypode deck: ' + e.message, 'error');
+            });
+          } else {
+            createVypodeUI();
+          }
+        } catch (e) {
+          console.warn('Vypode open failed:', e);
+          showFeedback('Could not open Vypode: ' + e.message, 'error');
         }
       }
-    });
+    };
     document.body.appendChild(btn);
   }
 
@@ -2329,6 +2485,18 @@
 
     // Detect account
     await initAccount();
+
+    window.addEventListener('pagehide', () => {
+      window.VypodeFilmState?.flush?.();
+    });
+    window.addEventListener('beforeunload', (e) => {
+      window.VypodeFilmState?.flush?.();
+      if (actionQueue.length > 0 || isProcessingQueue) {
+        e.preventDefault();
+        e.returnValue = 'Vypode is still syncing actions to Letterboxd.';
+        return e.returnValue;
+      }
+    });
 
     // Auto-open deck from next-page navigation
     if (window.location.hash === '#vypode-auto') {

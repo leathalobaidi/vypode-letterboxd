@@ -1,10 +1,16 @@
 {
   "name": "vypode-letterboxd",
-  "version": "5.0.0",
+  "version": "6.0.0",
   "private": true,
   "type": "module",
   "scripts": {
     "check": "node --check content.js && node --check film-state.js && node --check popup.js && node --check background.js && python3 -m json.tool manifest.json >/dev/null",
-    "test": "npm run check && node --test tests/unit/*.spec.mjs"
+    "test": "npm run test:self",
+    "test:unit": "npm run check && node --test tests/unit/*.spec.mjs",
+    "test:e2e": "node --test tests/e2e/*.spec.mjs",
+    "test:self": "npm run test:unit && npm run test:e2e"
+  },
+  "devDependencies": {
+    "linkedom": "^0.18.12"
   }
 }

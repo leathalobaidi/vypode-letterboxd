@@ -1,10 +1,11 @@
 {
   "manifest_version": 3,
   "name": "Vypode for Letterboxd",
-  "version": "5.0.0",
+  "version": "6.0.0",
   "description": "Swipe-style interface and local profile database for filtering, searching, and reviewing your Letterboxd history",
   "permissions": [
-    "storage"
+    "storage",
+    "unlimitedStorage"
   ],
   "host_permissions": [
     "https://letterboxd.com/*"

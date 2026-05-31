@@ -6,11 +6,13 @@ import { fileURLToPath } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const manifest = JSON.parse(fs.readFileSync(path.join(root, 'manifest.json'), 'utf8'));
+const pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
 
 test('manifest is local-first and has only required Chrome permissions', () => {
   assert.equal(manifest.manifest_version, 3);
-  assert.equal(manifest.version, '5.0.0');
-  assert.deepEqual(manifest.permissions, ['storage']);
+  assert.match(manifest.version, /^\d+\.\d+\.\d+$/);
+  assert.equal(manifest.version, pkg.version, 'manifest.json and package.json versions must match');
+  assert.deepEqual(manifest.permissions, ['storage', 'unlimitedStorage']);
   assert.equal('oauth2' in manifest, false);
   assert.equal('web_accessible_resources' in manifest, false);
   assert.equal(manifest.permissions.includes('identity'), false);

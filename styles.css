@@ -1,4 +1,4 @@
-/* VYPODE FOR LETTERBOXD - Styles v5.0.0 */
+/* VYPODE FOR LETTERBOXD - Styles v6.0.0 */
 
 /* ── Toggle Button ─────────────────────────────────────────────────── */
 
@@ -703,7 +703,7 @@
 .vypode-review-shortcuts b { color: rgba(255, 255, 255, 0.6); }
 
 /* ================================================================== */
-/* ── SETTINGS PANEL (v5.0) ─────────────────────────────────────────── */
+/* ── SETTINGS PANEL (v6.0) ─────────────────────────────────────────── */
 /* ================================================================== */
 
 .vypode-settings-panel {
@@ -952,9 +952,13 @@
 
 .vypode-db-controls {
   display: grid;
-  grid-template-columns: 1fr 130px 140px;
+  grid-template-columns: 1fr 1fr;
   gap: 8px;
   margin-bottom: 10px;
+}
+
+.vypode-db-controls input {
+  grid-column: 1 / -1;
 }
 
 .vypode-db-controls input,
