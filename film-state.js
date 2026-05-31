@@ -1,4 +1,4 @@
-// VYPODE FOR LETTERBOXD — FilmState Registry v6.0.2
+// SWIPE FOR LETTERBOXD — FilmState Registry v6.1.0
 // Persistent film state keyed by slug, stored in chrome.storage.local
 // Loaded before content.js — exposes window.VypodeFilmState
 

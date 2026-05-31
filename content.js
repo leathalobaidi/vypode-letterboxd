@@ -1,9 +1,10 @@
-// VYPODE FOR LETTERBOXD — Content Script v6.0.2
+// SWIPE FOR LETTERBOXD — Content Script v6.1.0
 // Background actions + auto-advance + auto-next-page + Voice Review + Star Rating
 // v6.0.0: FilmState registry, fresh poster filtering, durable skip,
 //         account awareness, collection sync, settings panel, local profile database
 // v6.0.1: corrupted-storage load safety, 429/503 sync backoff, throttled review fan-out
 // v6.0.2: same-instant reconcile/userAction tie-break, adaptive debounce for large libraries
+// v6.1.0: rebrand Vypode → "Swipe for Letterboxd" (user-facing strings only)
 (function() {
   'use strict';
   if (window.vypodeInjected) return;
@@ -1685,7 +1686,7 @@
           <input type="file" id="vypodeImportFile" accept=".json" style="display:none">
         </div>
 
-        <div class="vypode-settings-footer">Vypode v6.0.2</div>
+        <div class="vypode-settings-footer">Swipe for Letterboxd v6.1.0</div>
       </div>
     `;
 
@@ -1767,7 +1768,7 @@
 
     // Clear all
     document.getElementById('vypodeClearAll').addEventListener('click', () => {
-      if (confirm('Delete ALL local Vypode data on this device? This cannot be undone.')) {
+      if (confirm('Delete ALL local Swipe for Letterboxd data on this device? This cannot be undone.')) {
         window.VypodeFilmState.clearAll().then(() => {
           chrome.storage.local.remove(['vypode_user'], () => {});
           refreshSettingsStats();
@@ -2490,8 +2491,8 @@
 
     const btn = document.createElement('button');
     btn.className = 'vypode-toggle-btn';
-    btn.textContent = pageType === 'listing' ? 'Vypode Deck' : 'Vypode';
-    btn.title = pageType === 'listing' ? 'Browse films with Vypode swipe deck' : 'Open Vypode swipe interface';
+    btn.textContent = pageType === 'listing' ? 'Swipe Deck' : 'Swipe';
+    btn.title = pageType === 'listing' ? 'Browse films with the Swipe deck' : 'Open the Swipe interface';
     btn.onclick = () => {
       if (vypodeVisible) {
         hideVypode();
@@ -2500,14 +2501,14 @@
           if (pageType === 'listing') {
             Promise.resolve(createVypodeDeckUI()).catch(e => {
               console.warn('Vypode deck failed:', e);
-              showFeedback('Could not open Vypode deck: ' + e.message, 'error');
+              showFeedback('Could not open Swipe deck: ' + e.message, 'error');
             });
           } else {
             createVypodeUI();
           }
         } catch (e) {
           console.warn('Vypode open failed:', e);
-          showFeedback('Could not open Vypode: ' + e.message, 'error');
+          showFeedback('Could not open Swipe: ' + e.message, 'error');
         }
       }
     };

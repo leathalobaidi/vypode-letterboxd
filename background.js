@@ -1,4 +1,4 @@
-// VYPODE FOR LETTERBOXD — Background Service Worker v6.0.2
+// SWIPE FOR LETTERBOXD — Background Service Worker v6.1.0
 // Local-only release worker. Keeps content-script messages from surfacing
 // noisy "receiving end does not exist" errors while the registry lives in
 // chrome.storage on the user's device.

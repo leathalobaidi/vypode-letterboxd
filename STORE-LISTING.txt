@@ -1,0 +1,105 @@
+SWIPE FOR LETTERBOXD — CHROME WEB STORE LISTING (v6.1.0)
+=========================================================
+(Formerly "Vypode for Letterboxd". Internal storage keys/APIs unchanged.)
+Upload: zip the repo root (the folder containing manifest.json) as a new package
+version on https://chrome.google.com/webstore/devconsole
+Manifest version: 6.1.0  (must be higher than the currently published version)
+
+────────────────────────────────────────────────────────────────────────
+STORE LISTING TAB
+────────────────────────────────────────────────────────────────────────
+
+NAME:
+Swipe for Letterboxd
+
+SUMMARY (≤132 chars):
+A swipe-style deck plus a local database to triage, filter, and search your own Letterboxd watch history — fast.
+
+DESCRIPTION:
+Swipe for Letterboxd adds a Tinder-style swipe deck and a private, on-device film
+database to Letterboxd, so you can move through films quickly and make sense of
+your own viewing history.
+
+WHAT IT DOES
+• Swipe deck — On listing pages (popular, watchlist, lists), open a deck of FRESH
+  films (ones you haven't watched, liked, watch-listed, or skipped) and act on each
+  with a swipe or keyboard shortcut: watched, like, watchlist, or skip.
+• Local profile database — Run Collection Sync (while logged in) to build an
+  on-device registry of your watched films with title, year, director, genres,
+  poster, star rating, liked status, and review text where Letterboxd exposes it.
+• Filter, sort, search — Search your history and filter by watched / liked /
+  watchlist / rated / reviewed / genre / watched-date, then sort by rating, year,
+  watched date, or title. Open any film for a detail view.
+• Quick review — Write and submit a star rating + review from the deck.
+
+PRIVACY & WHERE YOUR DATA LIVES
+• Your film registry is stored locally in your browser (chrome.storage). There is no
+  account with us, no server, and nothing is sent to any third party.
+• Preferences sync via Chrome's built-in sync storage only.
+
+CATEGORY:
+Productivity   (alternative: Entertainment)
+
+LANGUAGE:
+English (United Kingdom)
+
+────────────────────────────────────────────────────────────────────────
+PRIVACY TAB
+────────────────────────────────────────────────────────────────────────
+
+SINGLE PURPOSE DESCRIPTION:
+Provide a swipe-style deck and a local, on-device database for triaging, filtering,
+searching, and reviewing the user's own Letterboxd watch history.
+
+ARE YOU USING REMOTE CODE?
+No — all scripts are bundled; nothing is fetched or executed from a remote source.
+
+DATA USE CERTIFICATIONS — CHECK ALL THREE:
+[x] Does not sell user data
+[x] Does not use/transfer user data for purposes unrelated to the single purpose
+[x] Does not use/transfer user data to determine creditworthiness / for lending
+
+DATA COLLECTION:
+• Personally identifiable information: No
+• Health / Financial / Authentication / Location / Communications: No
+• Web history: No
+• User activity: No
+• Website content: YES — the extension reads your own Letterboxd profile pages
+  (film titles, ratings, liked status, review text) to build the local database.
+  This content is stored ON YOUR DEVICE only and is never transmitted to us or any
+  third party. Certify: used only for the single purpose, never sold, never transferred.
+
+────────────────────────────────────────────────────────────────────────
+IMPORTANT DISCLOSURE (also stated in the README)
+────────────────────────────────────────────────────────────────────────
+• Collection Sync makes a number of authenticated requests to letterboxd.com AS YOU
+  (your logged-in session) to read your watched films, watchlist, and likes. Requests
+  are throttled and back off on rate-limit responses.
+• Marking watched/liked/watchlist and submitting reviews WRITE to your real Letterboxd
+  account using your active session. Review submission posts to a Letterboxd endpoint
+  that is not a public, documented API and may change without notice.
+• This is an unofficial, independent tool, not affiliated with or endorsed by
+  Letterboxd. Use it in accordance with Letterboxd's Terms of Use.
+
+────────────────────────────────────────────────────────────────────────
+PERMISSION JUSTIFICATIONS
+────────────────────────────────────────────────────────────────────────
+
+storage:
+Stores the on-device film registry (your watch history + flags) and a few filter
+preferences. No personal data leaves the device.
+
+unlimitedStorage:
+Large watch histories (thousands of films, each with review text) can exceed Chrome's
+default 5 MB local-storage quota; this lets the full database persist locally.
+
+Host access (content scripts + sync on https://letterboxd.com/*):
+The deck, database UI, and Collection Sync run on Letterboxd pages and read your own
+profile pages while you are signed in. Scope is limited to letterboxd.com.
+
+────────────────────────────────────────────────────────────────────────
+GRAPHICS TO UPLOAD
+────────────────────────────────────────────────────────────────────────
+1. Icon 128×128 — icons/icon128.png
+2. Screenshot 1280×800 — REQUIRED, still to capture (the swipe deck + the database browser)
+3. Promo tiles — optional
