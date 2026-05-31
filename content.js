@@ -44,9 +44,9 @@
     watch: '[data-track-action="Watched"], .action.-watch, .film-watch-link-target',
     like: '[data-track-action="Liked"], .action.-like, .film-like-link-target',
     watchlist: '[data-track-action="Watchlist"], .action.-watchlist, .film-watch-list-link-target',
-    watchedState: '.action.-watch.-checked, .icon-watched.-on, .film-watch-link-target.icon-watched.-on',
-    likedState: '.action.-like.-checked, .icon-like.-on, .film-like-link-target.icon-like.-on',
-    watchlistState: '.action.-watchlist.-checked, .icon-watchlist.-on, .film-watch-list-link-target.icon-watchlist.-on'
+    watchedState: '.action.-watch.-checked, .action.-watch.-on, .icon-watched.-on, .film-watch-link-target.icon-watched.-on',
+    likedState: '.action.-like.-checked, .action.-like.-on, .icon-like.-on, .film-like-link-target.icon-like.-on',
+    watchlistState: '.action.-watchlist.-checked, .action.-watchlist.-on, .icon-watchlist.-on, .film-watch-list-link-target.icon-watchlist.-on, .remove-from-watchlist'
   };
 
   // ── HTML escaping ───────────────────────────────────────────────────
@@ -59,6 +59,15 @@
   function absoluteLetterboxdUrl(path) {
     if (!path) return '';
     return path.startsWith('http') ? path : 'https://letterboxd.com' + path;
+  }
+
+  function readCsrfToken(doc) {
+    const root = doc || document;
+    const tokens = Array.from(root.querySelectorAll('input[name="__csrf"], meta[name="csrf-token"]'))
+      .map(el => el.value || el.content || el.getAttribute('content') || '')
+      .map(value => value.trim())
+      .filter(value => value && value !== 'placeholder');
+    return tokens[0] || null;
   }
 
   function normalizePosterUrl(url, srcset) {
@@ -128,6 +137,17 @@
     });
   }
 
+  function usernameFromProfileHref(href) {
+    const match = href?.match(/^\/([a-zA-Z0-9_]+)\/?$/);
+    if (!match) return null;
+
+    const slug = match[1];
+    if (/^(films|lists|members|activity|journal|search|settings|pro|about)$/i.test(slug)) {
+      return null;
+    }
+    return slug;
+  }
+
   function detectLetterboxdUsername() {
     // Primary: nav profile link
     const profileLink = document.querySelector('.main-nav a[href*="/"][class*="avatar"]') ||
@@ -135,20 +155,34 @@
                         document.querySelector('.nav .profile-menu a[href]') ||
                         document.querySelector('header a.avatar[href]');
     if (profileLink) {
-      const match = profileLink.getAttribute('href')?.match(/^\/([^\/]+)\/?$/);
-      if (match) return match[1];
+      const username = usernameFromProfileHref(profileLink.getAttribute('href'));
+      if (username) return username;
+    }
+
+    // Current Letterboxd menus expose a "Profile" link under a signed-in
+    // account toggle instead of an avatar href on every film page.
+    const allLinks = Array.from(document.querySelectorAll('a[href]'));
+    const hasSignOutLink = allLinks.some(link => /sign\s*out/i.test(link.textContent || ''));
+    if (hasSignOutLink) {
+      for (const link of allLinks) {
+        const username = usernameFromProfileHref(link.getAttribute('href'));
+        if (!username) continue;
+        const text = link.textContent.trim().toLowerCase();
+        if (text === 'profile' || text === username.toLowerCase()) {
+          return username;
+        }
+      }
     }
 
     // Fallback: look for the username in the header profile area
     const navItems = document.querySelectorAll('.main-nav a[href]');
     for (const link of navItems) {
-      const href = link.getAttribute('href');
       // Profile links are like /username/ with just one path segment
-      if (href && href.match(/^\/[a-zA-Z0-9_]+\/?$/) && !href.match(/^\/(films|lists|members|activity|journal|search|settings|pro|about)\/?$/)) {
+      const slug = usernameFromProfileHref(link.getAttribute('href'));
+      if (slug) {
         const text = link.textContent.trim().toLowerCase();
-        const slug = href.replace(/\//g, '');
         // Confirm it's a profile link by checking if text matches or link has avatar
-        if (link.querySelector('img') || link.classList.contains('avatar') || text === slug) {
+        if (link.querySelector('img') || link.classList.contains('avatar') || text === slug.toLowerCase()) {
           return slug;
         }
       }
@@ -260,9 +294,9 @@
         const ratingValue = parseRatingValue(ratingEl);
 
         const overlay = filmPoster.querySelector('.film-poster-overlay, .overlay');
-        const isWatched = overlay?.querySelector('.icon-watched.-on, .action.-watched.-checked') !== null;
-        const isLiked = overlay?.querySelector('.icon-like.-on, .action.-like.-checked') !== null;
-        const inWatchlist = overlay?.querySelector('.icon-watchlist.-on, .action.-watchlist.-checked') !== null;
+        const isWatched = overlay?.querySelector('.icon-watched.-on, .action.-watch.-checked, .action.-watch.-on') !== null;
+        const isLiked = overlay?.querySelector('.icon-like.-on, .action.-like.-checked, .action.-like.-on') !== null;
+        const inWatchlist = overlay?.querySelector('.icon-watchlist.-on, .action.-watchlist.-checked, .action.-watchlist.-on, .remove-from-watchlist') !== null;
 
         // Update FilmState from DOM overlay states
         if (window.VypodeFilmState) {
@@ -598,7 +632,7 @@
   function vyLog(...args) { console.log('[Vypode]', ...args); }
   function vyWarn(...args) { console.warn('[Vypode]', ...args); }
 
-  // Direct API submission — POSTs to /s/save-diary-entry like Letterboxd's own modal does.
+  // Direct API submission — POSTs to Letterboxd's current production-log API.
   // Avoids the fragile hidden-iframe DOM-scraping approach entirely.
   async function submitReview(filmUrl, reviewText, rating) {
     if (!requireActiveLetterboxdSession('submit reviews')) return;
@@ -618,51 +652,45 @@
 
     try {
       if (!filmSlug) throw new Error('Could not parse film slug from ' + filmUrl);
-      // Normalize to the canonical film page. Deck URLs can be user-scoped
-      // (/<user>/film/<slug>/) which 404 for unlogged films — the canonical
-      // /film/<slug>/ page always exists and carries CSRF + production-uid.
       const canonicalUrl = 'https://letterboxd.com/film/' + filmSlug + '/';
-      vyLog('fetching film page for CSRF + UID:', canonicalUrl);
-      const r = await fetch(canonicalUrl, { credentials: 'same-origin', cache: 'no-store' });
+      const filmDataUrl = canonicalUrl + 'json/';
+      vyLog('fetching film JSON for CSRF + LID:', filmDataUrl);
+      const r = await fetch(filmDataUrl, { credentials: 'same-origin', cache: 'no-store' });
       if (!r.ok) throw new Error('Film page fetch failed: ' + r.status);
-      const html = await r.text();
-      const doc = new DOMParser().parseFromString(html, 'text/html');
+      const filmData = await r.json();
 
-      const csrf = doc.querySelector('input[name="__csrf"]')?.value;
-      // data-production-uid is on every film page; data-watchable-uid only on
-      // review elements (missing on films with no visible reviews).
-      const watchableUid =
-        doc.querySelector('[data-production-uid]')?.dataset?.productionUid ||
-        doc.querySelector('[data-watchable-uid]')?.dataset?.watchableUid;
-      vyLog('parsed csrf?', !!csrf, csrf === 'placeholder' ? '(placeholder!)' : '', 'uid?', watchableUid);
+      const csrf = readCsrfToken(document) || filmData.csrf;
+      const productionId = filmData.lid;
+      vyLog('parsed csrf?', !!csrf, 'production LID?', productionId);
 
       if (!csrf || csrf === 'placeholder') throw new Error('Not logged in to Letterboxd');
-      if (!watchableUid) throw new Error('Could not identify film (no production-uid)');
+      if (!productionId) throw new Error('Could not identify film (no production lid)');
 
-      // 3. Build form data — diary entry with today's date so it lands on profile
+      // 3. Build API payload — diary entry with today's date so it lands on profile
       const today = new Date();
       const dateStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
-      const form = new URLSearchParams();
-      form.set('__csrf', csrf);
-      form.set('viewingId', '');
-      form.set('viewingableUid', watchableUid);
-      form.set('specifiedDate', 'true');
-      form.set('viewingDateStr', dateStr);
-      if (fullReview) form.set('review', fullReview);
-      if (rating > 0) form.set('rating', String(rating * 2)); // 0-10 half-star scale
-      form.set('rewatch', 'false');
-      form.set('containsSpoilers', 'false');
-      form.set('tags', '');
-      vyLog('POST /s/save-diary-entry payload keys:', [...form.keys()]);
+      const payload = {
+        productionId,
+        diaryDetails: { diaryDate: dateStr, rewatch: false },
+        tags: [],
+        like: false
+      };
+      if (fullReview) payload.review = { text: fullReview, containsSpoilers: false };
+      if (rating > 0) payload.rating = rating;
+      vyLog('POST /api/v0/production-log-entries payload keys:', Object.keys(payload));
 
-      const resp = await fetch('https://letterboxd.com/s/save-diary-entry', {
+      const resp = await fetch('https://letterboxd.com/api/v0/production-log-entries', {
         method: 'POST',
         credentials: 'same-origin',
-        headers: { 'X-Requested-With': 'XMLHttpRequest' },
-        body: form,
+        headers: {
+          'Accept': 'application/json',
+          'Content-Type': 'application/json; charset=UTF-8',
+          'X-CSRF-TOKEN': csrf
+        },
+        body: JSON.stringify(payload),
       });
       const text = await resp.text();
-      vyLog('save-diary-entry status:', resp.status, 'body preview:', text.slice(0, 400));
+      vyLog('production-log-entries status:', resp.status, 'body preview:', text.slice(0, 400));
 
       if (!resp.ok) throw new Error('Server returned ' + resp.status);
 
@@ -843,9 +871,9 @@
           director: '', genres: [],
           url: absoluteLetterboxdUrl(href),
           slug: filmSlug,
-          isWatched: overlay?.querySelector('.icon-watched.-on, .action.-watched.-checked') !== null,
-          isLiked: overlay?.querySelector('.icon-like.-on, .action.-like.-checked') !== null,
-          inWatchlist: overlay?.querySelector('.icon-watchlist.-on, .action.-watchlist.-checked') !== null,
+          isWatched: overlay?.querySelector('.icon-watched.-on, .action.-watch.-checked, .action.-watch.-on') !== null,
+          isLiked: overlay?.querySelector('.icon-like.-on, .action.-like.-checked, .action.-like.-on') !== null,
+          inWatchlist: overlay?.querySelector('.icon-watchlist.-on, .action.-watchlist.-checked, .action.-watchlist.-on, .remove-from-watchlist') !== null,
           actioned: false
         };
         persistFilmRecord(film, 'domSync');

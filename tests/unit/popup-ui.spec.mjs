@@ -56,6 +56,35 @@ test('cached profile is not presented as an active login', () => {
   assert.match(popupJs, /Log in to Letterboxd and refresh/);
 });
 
+test('account detection recognizes the current signed-in Letterboxd menu', () => {
+  assert.match(contentJs, /function usernameFromProfileHref/);
+  assert.match(contentJs, /hasSignOutLink/);
+  assert.match(contentJs, /text === 'profile'/);
+  assert.match(contentJs, /text === username\.toLowerCase\(\)/);
+});
+
+test('single film state detection handles current Letterboxd action classes', () => {
+  assert.match(contentJs, /watchedState: '.*\.action\.-watch\.-on/);
+  assert.match(contentJs, /likedState: '.*\.action\.-like\.-on/);
+  assert.match(contentJs, /watchlistState: '.*\.action\.-watchlist\.-on/);
+  assert.match(contentJs, /watchlistState: '.*\.remove-from-watchlist/);
+  assert.ok((contentJs.match(/\.action\.-watch\.-on/g) || []).length >= 3);
+  assert.ok((contentJs.match(/\.action\.-like\.-on/g) || []).length >= 3);
+  assert.ok((contentJs.match(/\.action\.-watchlist\.-on/g) || []).length >= 3);
+  assert.doesNotMatch(contentJs, /action\.-watched\.-checked/);
+});
+
+test('review submission uses current Letterboxd production-log api', () => {
+  assert.match(contentJs, /function readCsrfToken/);
+  assert.match(contentJs, /value && value !== 'placeholder'/);
+  assert.match(contentJs, /const csrf = readCsrfToken\(document\) \|\| filmData\.csrf/);
+  assert.match(contentJs, /const productionId = filmData\.lid/);
+  assert.match(contentJs, /api\/v0\/production-log-entries/);
+  assert.match(contentJs, /'X-CSRF-TOKEN': csrf/);
+  assert.doesNotMatch(contentJs, /querySelector\('input\\[name="__csrf"\\]'\)\\?\\.value/);
+  assert.doesNotMatch(contentJs, /s\/save-diary-entry/);
+});
+
 test('collection sync requires the current browser session to be logged in', () => {
   assert.match(contentJs, /if \(!isLetterboxdSessionActive\) \{/);
   assert.match(contentJs, /Log in to Letterboxd to sync your profile/);
