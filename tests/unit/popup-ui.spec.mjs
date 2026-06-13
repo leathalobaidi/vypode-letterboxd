@@ -71,9 +71,12 @@ test('single film state detection handles current Letterboxd action classes', ()
   assert.match(contentJs, /likedState: '.*\.action\.-like\.-on/);
   assert.match(contentJs, /watchlistState: '.*\.action\.-watchlist\.-on/);
   assert.match(contentJs, /watchlistState: '.*\.remove-from-watchlist/);
-  assert.ok((contentJs.match(/\.action\.-watch\.-on/g) || []).length >= 3);
-  assert.ok((contentJs.match(/\.action\.-like\.-on/g) || []).length >= 3);
-  assert.ok((contentJs.match(/\.action\.-watchlist\.-on/g) || []).length >= 3);
+  // v6.2.0 consolidated overlay-state detection into one extractor, so the
+  // class must appear in BOTH the single-film SELECTORS and the (now single)
+  // listing overlay check — two sites, not the old three copy-pasted ones.
+  assert.ok((contentJs.match(/\.action\.-watch\.-on/g) || []).length >= 2);
+  assert.ok((contentJs.match(/\.action\.-like\.-on/g) || []).length >= 2);
+  assert.ok((contentJs.match(/\.action\.-watchlist\.-on/g) || []).length >= 2);
   assert.doesNotMatch(contentJs, /action\.-watched\.-checked/);
   assert.doesNotMatch(contentJs, /\?\.querySelector\([^)\n]+\) !== null/);
 });

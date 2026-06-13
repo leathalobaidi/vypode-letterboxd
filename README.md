@@ -1,9 +1,31 @@
-# Swipe for Letterboxd v6.1
+# Swipe for Letterboxd v6.2
 
 > Formerly **Vypode for Letterboxd** — renamed to **Swipe for Letterboxd** in v6.1.0. Internal storage keys and APIs are unchanged, so existing local data carries over.
 
 
 A Chrome extension that adds a swipe-style interface and a local profile database for Letterboxd. It helps you move through films quickly, hide titles you have already handled, and search your own watched history by title, rating, liked status, and review text where Letterboxd exposes it.
+
+## What's New in v6.2.0
+
+- **Future-proof film detection** — the deck now also reads Letterboxd's new
+  React (`LazyPoster`) grid markup, already live on member/profile pages,
+  including before poster images hydrate. One unified extractor replaces two
+  duplicated scrapers, so listing pages, fetched next pages, and the new
+  markup all behave identically.
+- **CSV export in Letterboxd's import format** — Settings → Data → *Export CSV
+  (Letterboxd)* writes your watched films (title, year, director, rating,
+  watch date, review) as a file `letterboxd.com/import` accepts. Your
+  local-only database is now fully portable.
+- **No more dead-end deck clicks** — on AJAX-loaded grids (e.g. Films →
+  Popular) the deck waits for films to arrive instead of failing with
+  "No films found".
+- **Filter changes keep your place** — re-applying deck filters now refilters
+  the full accumulated deck (across auto-loaded pages) instead of rescraping
+  only the first page.
+- **Snappier** — the next card's metadata is prefetched, and database search
+  is debounced so big libraries don't rescan on every keystroke.
+- **Cleaner data** — browsing a listing no longer re-stamps fresh
+  `watchedAt` timestamps onto films you watched long ago.
 
 ## What's New in v6.0.2
 

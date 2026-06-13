@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Swipe for Letterboxd",
-  "version": "6.1.0",
+  "version": "6.2.0",
   "description": "Swipe-style interface and local profile database for filtering, searching, and reviewing your Letterboxd history",
   "permissions": [
     "storage",

@@ -1,4 +1,4 @@
-// SWIPE FOR LETTERBOXD — FilmState Registry v6.1.0
+// SWIPE FOR LETTERBOXD — FilmState Registry v6.2.0
 // Persistent film state keyed by slug, stored in chrome.storage.local
 // Loaded before content.js — exposes window.VypodeFilmState
 
@@ -540,6 +540,32 @@
     },
 
     // ── Export / Import ─────────────────────────────────────────────
+
+    // Watched films as a CSV the official letterboxd.com/import page accepts
+    // (Title, Year, Directors, Rating, WatchedDate, Review). Makes the local
+    // registry portable back into any Letterboxd account.
+    exportLetterboxdCsv() {
+      const csvField = (value) => {
+        const s = value == null ? '' : String(value);
+        return /[",\n\r]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+      };
+      const lines = ['Title,Year,Directors,Rating,WatchedDate,Review'];
+      for (const slug in registry) {
+        if (!isSafeSlug(slug)) continue;
+        const e = registry[slug];
+        if (!e || !e.watched) continue;
+        const watchedDate = e.watchedAt ? String(e.watchedAt).slice(0, 10) : '';
+        lines.push([
+          csvField(e.title || slug),
+          csvField(e.year || ''),
+          csvField(e.director || ''),
+          csvField(e.ratingValue || ''),
+          csvField(watchedDate),
+          csvField(e.reviewText || '')
+        ].join(','));
+      }
+      return lines.join('\r\n');
+    },
 
     exportData() {
       return JSON.stringify({

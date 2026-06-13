@@ -1,10 +1,10 @@
-// SWIPE FOR LETTERBOXD — Content Script v6.1.0
+// SWIPE FOR LETTERBOXD — Content Script v6.2.0
 // Background actions + auto-advance + auto-next-page + Voice Review + Star Rating
 // v6.0.0: FilmState registry, fresh poster filtering, durable skip,
 //         account awareness, collection sync, settings panel, local profile database
 // v6.0.1: corrupted-storage load safety, 429/503 sync backoff, throttled review fan-out
 // v6.0.2: same-instant reconcile/userAction tie-break, adaptive debounce for large libraries
-// v6.1.0: rebrand Vypode → "Swipe for Letterboxd" (user-facing strings only)
+// v6.2.0: rebrand Vypode → "Swipe for Letterboxd" (user-facing strings only)
 (function() {
   'use strict';
   if (window.vypodeInjected) return;
@@ -15,7 +15,9 @@
   let currentZone = 'neutral';
   let isOverCard = false;
   let vypodeVisible = false;
-  let filmDeck = [];
+  let filmDeck = [];       // filtered deck the user swipes through
+  let masterDeck = [];     // unfiltered films accumulated across pages — the
+                           // source of truth when filters are re-applied
   let currentDeckIndex = 0;
   let isListingPage = false;
   let isProcessingAction = false;
@@ -286,68 +288,89 @@
     };
   }
 
-  function getFilmsFromListing() {
+  // One extractor for every listing shape. Handles both the classic markup
+  // (.poster-container/.film-poster/.poster with an <a> + <img>) and the new
+  // React LazyPoster markup ([data-item-slug] components, already used on
+  // member/profile grids), which carries its metadata in data-item-*
+  // attributes and may not have hydrated an <img> yet.
+  function extractListingFilms(root, opts) {
+    const skipSlugs = opts?.skipSlugs || null;
     const films = [];
     const seen = new Set(); // Dedupe by slug
-    const posterContainers = document.querySelectorAll('.poster-container, .film-poster, .poster');
 
-    posterContainers.forEach(container => {
+    const overlayStates = (scope) => {
+      const overlay = scope?.querySelector?.('.film-poster-overlay, .overlay');
+      return {
+        isWatched: Boolean(overlay?.querySelector('.icon-watched.-on, .action.-watch.-checked, .action.-watch.-on')),
+        isLiked: Boolean(overlay?.querySelector('.icon-like.-on, .action.-like.-checked, .action.-like.-on')),
+        inWatchlist: Boolean(overlay?.querySelector('.icon-watchlist.-on, .action.-watchlist.-checked, .action.-watchlist.-on, .remove-from-watchlist'))
+      };
+    };
+
+    const addFilm = (slug, data) => {
+      if (!slug || seen.has(slug)) return;
+      if (skipSlugs && skipSlugs.has(slug)) return;
+      seen.add(slug);
+      const film = { director: '', genres: [], actioned: false, ...data, slug };
+      persistFilmRecord(film, 'domSync');
+      films.push(film);
+    };
+
+    // New React markup first — its data attributes are the most reliable.
+    root.querySelectorAll('[data-item-slug]').forEach(component => {
+      const slug = component.getAttribute('data-item-slug');
+      if (!slug) return;
+      const href = component.getAttribute('data-item-link') || `/film/${slug}/`;
+      const img = component.querySelector('img');
+      const container = component.closest('.poster-container, .griditem, li') || component;
+      const rawName = component.getAttribute('data-item-name') ||
+                      component.getAttribute('data-item-full-display-name') ||
+                      img?.alt;
+      const title = titleWithoutPosterPrefix(rawName, slug.replace(/-/g, ' '));
+      const ratingEl = container.querySelector('.rating[class*="rated-"], .rating');
+      addFilm(slug, {
+        title: title.charAt(0).toUpperCase() + title.slice(1),
+        year: parseYearFromTitle(title),
+        poster: normalizePosterUrl(img?.src || img?.dataset?.src, img?.srcset),
+        rating: ratingEl?.textContent?.trim() || '',
+        ratingValue: parseRatingValue(ratingEl),
+        url: absoluteLetterboxdUrl(href),
+        ...overlayStates(container)
+      });
+    });
+
+    // Classic markup (film pages, lists, browse grids).
+    root.querySelectorAll('.poster-container, .film-poster, .poster').forEach(container => {
       const link = container.querySelector('a[href*="/film/"]') || container.closest('a[href*="/film/"]');
       const img = container.querySelector('img');
       const filmPoster = container.closest('.poster-container') || container;
+      if (!link || !img) return;
 
-      if (link && img) {
-        const href = link.getAttribute('href');
-        const filmSlug = href.match(/\/film\/([^\/]+)/)?.[1];
+      const href = link.getAttribute('href');
+      const filmSlug = href.match(/\/film\/([^\/]+)/)?.[1];
+      if (!filmSlug) return;
 
-        // Dedupe: skip if we already have this slug
-        if (!filmSlug || seen.has(filmSlug)) return;
-        seen.add(filmSlug);
-
-        let title = titleWithoutPosterPrefix(
-          img.alt || container.getAttribute('data-film-name'),
-          filmSlug?.replace(/-/g, ' ')
-        );
-
-        const posterUrl = normalizePosterUrl(img.src || img.dataset.src, img.srcset);
-
-        const ratingEl = filmPoster.querySelector('.rating') || filmPoster.querySelector('[class*="rating"]');
-        const rating = ratingEl?.textContent?.trim() || '';
-        const ratingValue = parseRatingValue(ratingEl);
-
-        const overlay = filmPoster.querySelector('.film-poster-overlay, .overlay');
-        const isWatched = Boolean(overlay?.querySelector('.icon-watched.-on, .action.-watch.-checked, .action.-watch.-on'));
-        const isLiked = Boolean(overlay?.querySelector('.icon-like.-on, .action.-like.-checked, .action.-like.-on'));
-        const inWatchlist = Boolean(overlay?.querySelector('.icon-watchlist.-on, .action.-watchlist.-checked, .action.-watchlist.-on, .remove-from-watchlist'));
-
-        // Update FilmState from DOM overlay states
-        if (window.VypodeFilmState) {
-          if (isWatched) window.VypodeFilmState.setFlag(filmSlug, 'watched', true, 'domSync');
-          if (isLiked) window.VypodeFilmState.setFlag(filmSlug, 'liked', true, 'domSync');
-          if (inWatchlist) window.VypodeFilmState.setFlag(filmSlug, 'watchlist', true, 'domSync');
-        }
-
-        const film = {
-          title: title.charAt(0).toUpperCase() + title.slice(1),
-          year: parseYearFromTitle(title),
-          poster: posterUrl,
-          rating: rating,
-          ratingValue,
-          director: '',
-          genres: [],
-          url: absoluteLetterboxdUrl(href),
-          slug: filmSlug,
-          isWatched,
-          isLiked,
-          inWatchlist,
-          actioned: false
-        };
-        persistFilmRecord(film, 'domSync');
-        films.push(film);
-      }
+      const title = titleWithoutPosterPrefix(
+        img.alt || container.getAttribute('data-film-name'),
+        filmSlug.replace(/-/g, ' ')
+      );
+      const ratingEl = filmPoster.querySelector('.rating') || filmPoster.querySelector('[class*="rating"]');
+      addFilm(filmSlug, {
+        title: title.charAt(0).toUpperCase() + title.slice(1),
+        year: parseYearFromTitle(title),
+        poster: normalizePosterUrl(img.src || img.dataset.src, img.srcset),
+        rating: ratingEl?.textContent?.trim() || '',
+        ratingValue: parseRatingValue(ratingEl),
+        url: absoluteLetterboxdUrl(href),
+        ...overlayStates(filmPoster)
+      });
     });
 
     return films;
+  }
+
+  function getFilmsFromListing() {
+    return extractListingFilms(document);
   }
 
   // Filter the film deck using the FilmState registry
@@ -584,6 +607,7 @@
       currentDeckIndex++;
       updateProgress();
       enrichFilmData(filmDeck[currentDeckIndex]);
+      enrichFilmData(filmDeck[currentDeckIndex + 1]); // pre-warm the next card's metadata
       preloadNextPosters(currentDeckIndex + 1, 10);
       setTimeout(() => {
         populateCurrentCard(filmDeck[currentDeckIndex]);
@@ -847,6 +871,7 @@
       updateProgress();
       // Pre-fetch film details for the new card
       enrichFilmData(filmDeck[currentDeckIndex]);
+      enrichFilmData(filmDeck[currentDeckIndex + 1]); // pre-warm the next card's metadata
       preloadNextPosters(currentDeckIndex + 1, 10);
     } else {
       const nextUrl = currentNextPageUrl || getNextPageUrl();
@@ -872,6 +897,7 @@
 
       // Extract films from the fetched page DOM
       const newFilms = extractFilmsFromDoc(doc);
+      masterDeck.push(...newFilms);
       const filtered = filterFilmDeck(newFilms);
 
       // Update the next-page URL from the fetched document
@@ -889,6 +915,7 @@
         updateDeckCard();
         updateProgress();
         enrichFilmData(filmDeck[currentDeckIndex]);
+        enrichFilmData(filmDeck[currentDeckIndex + 1]); // pre-warm the next card's metadata
         preloadNextPosters(currentDeckIndex + 1, 10);
         showFeedback('Loaded ' + filtered.length + ' more films', 'watchlist');
       } else if (currentNextPageUrl) {
@@ -909,53 +936,8 @@
   }
 
   function extractFilmsFromDoc(doc) {
-    const films = [];
-    const seen = new Set();
-    const posterContainers = doc.querySelectorAll('.poster-container, .film-poster, .poster');
-
-    posterContainers.forEach(container => {
-      const link = container.querySelector('a[href*="/film/"]') || container.closest('a[href*="/film/"]');
-      const img = container.querySelector('img');
-      const filmPoster = container.closest('.poster-container') || container;
-
-      if (link && img) {
-        const href = link.getAttribute('href');
-        const filmSlug = href.match(/\/film\/([^\/]+)/)?.[1];
-        if (!filmSlug || seen.has(filmSlug)) return;
-        seen.add(filmSlug);
-
-        // Also skip if already in the current deck
-        if (filmDeck.some(f => f.slug === filmSlug)) return;
-
-        let title = titleWithoutPosterPrefix(
-          img.alt || container.getAttribute('data-film-name'),
-          filmSlug?.replace(/-/g, ' ')
-        );
-        const posterUrl = normalizePosterUrl(img.src || img.dataset.src, img.srcset);
-
-        const ratingEl = filmPoster.querySelector('.rating') || filmPoster.querySelector('[class*="rating"]');
-        const overlay = filmPoster.querySelector('.film-poster-overlay, .overlay');
-
-        const film = {
-          title: title.charAt(0).toUpperCase() + title.slice(1),
-          year: parseYearFromTitle(title),
-          poster: posterUrl,
-          rating: ratingEl?.textContent?.trim() || '',
-          ratingValue: parseRatingValue(ratingEl),
-          director: '', genres: [],
-          url: absoluteLetterboxdUrl(href),
-          slug: filmSlug,
-          isWatched: Boolean(overlay?.querySelector('.icon-watched.-on, .action.-watch.-checked, .action.-watch.-on')),
-          isLiked: Boolean(overlay?.querySelector('.icon-like.-on, .action.-like.-checked, .action.-like.-on')),
-          inWatchlist: Boolean(overlay?.querySelector('.icon-watchlist.-on, .action.-watchlist.-checked, .action.-watchlist.-on, .remove-from-watchlist')),
-          actioned: false
-        };
-        persistFilmRecord(film, 'domSync');
-        films.push(film);
-      }
-    });
-
-    return films;
+    // Skip films already collected into the deck (across auto-paged loads).
+    return extractListingFilms(doc, { skipSlugs: new Set(masterDeck.map(f => f.slug)) });
   }
 
   function waitForQueueDrain(callback, elapsed) {
@@ -997,6 +979,7 @@
       currentDeckIndex++;
       updateProgress();
       enrichFilmData(filmDeck[currentDeckIndex]);
+      enrichFilmData(filmDeck[currentDeckIndex + 1]); // pre-warm the next card's metadata
       preloadNextPosters(currentDeckIndex + 1, 10);
       setTimeout(() => {
         populateCurrentCard(filmDeck[currentDeckIndex]);
@@ -1679,6 +1662,7 @@
           <div class="vypode-settings-section-title">Data</div>
           <div class="vypode-data-actions">
             <button class="vypode-settings-btn vypode-btn-secondary" id="vypodeExport">Export data</button>
+            <button class="vypode-settings-btn vypode-btn-secondary" id="vypodeExportCsv" title="Watched films as a CSV that letterboxd.com/import accepts">Export CSV (Letterboxd)</button>
             <button class="vypode-settings-btn vypode-btn-secondary" id="vypodeImport">Import data</button>
             <button class="vypode-settings-btn vypode-btn-danger" id="vypodeClearSkipped">Clear skipped</button>
             <button class="vypode-settings-btn vypode-btn-danger" id="vypodeClearAll">Clear all local data</button>
@@ -1686,7 +1670,7 @@
           <input type="file" id="vypodeImportFile" accept=".json" style="display:none">
         </div>
 
-        <div class="vypode-settings-footer">Swipe for Letterboxd v6.1.0</div>
+        <div class="vypode-settings-footer">Swipe for Letterboxd v6.2.0</div>
       </div>
     `;
 
@@ -1704,7 +1688,11 @@
         window.VypodeFilmState?.setPref(pref, toggle.checked);
         if (isListingPage) {
           const currentSlug = filmDeck[currentDeckIndex]?.slug;
-          filmDeck = filterFilmDeck(getFilmsFromListing());
+          // Re-filter from the accumulated master deck so films collected via
+          // auto-paging survive a filter change (re-scraping the DOM would
+          // throw away every page after the first).
+          const source = masterDeck.length ? masterDeck : getFilmsFromListing();
+          filmDeck = filterFilmDeck(source);
           currentDeckIndex = Math.max(0, filmDeck.findIndex(film => film.slug === currentSlug));
           if (filmDeck.length > 0) updateDeckCard();
           else showFeedback('Current page has no films matching these filters', 'watchlist');
@@ -1726,6 +1714,24 @@
       a.click();
       URL.revokeObjectURL(url);
       showFeedback('Data exported', 'watchlist');
+    });
+
+    // Export CSV in Letterboxd's import format (watched films only)
+    document.getElementById('vypodeExportCsv').addEventListener('click', () => {
+      const csv = window.VypodeFilmState.exportLetterboxdCsv();
+      const rowCount = csv.split('\r\n').length - 1;
+      if (rowCount === 0) {
+        showFeedback('No watched films to export yet — run Collection Sync first', 'error');
+        return;
+      }
+      const blob = new Blob([csv], { type: 'text/csv' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `letterboxd-import-${new Date().toISOString().slice(0,10)}.csv`;
+      a.click();
+      URL.revokeObjectURL(url);
+      showFeedback(`Exported ${rowCount} watched films as CSV`, 'watchlist');
     });
 
     // Import
@@ -1950,11 +1956,22 @@
   async function createVypodeDeckUI() {
     let allFilms = getFilmsFromListing();
     if (allFilms.length === 0) {
-      showFeedback('No films found on this page', 'error');
+      // Listing grids are often AJAX-loaded after our button appears — wait
+      // briefly for the films to arrive instead of dead-ending the click.
+      showFeedback('Waiting for films to load...', 'watch');
+      const deadline = Date.now() + 8000;
+      while (allFilms.length === 0 && Date.now() < deadline) {
+        await sleep(500);
+        allFilms = getFilmsFromListing();
+      }
+    }
+    if (allFilms.length === 0) {
+      showFeedback('No films found yet — wait for the page to finish loading, then try again', 'error');
       return;
     }
 
     // Apply fresh poster filtering
+    masterDeck = allFilms;
     filmDeck = filterFilmDeck(allFilms);
 
     if (filmDeck.length === 0) {
@@ -1969,8 +1986,9 @@
       { isWatched: film.isWatched, isLiked: film.isLiked, inWatchlist: film.inWatchlist },
       true
     );
-    // Lazy-fetch film details for the first card
+    // Lazy-fetch film details for the first two cards
     enrichFilmData(film);
+    enrichFilmData(filmDeck[1]);
   }
 
   function createVypodeOverlay(film, states, isDeck) {
