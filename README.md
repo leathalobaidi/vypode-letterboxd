@@ -1,9 +1,24 @@
-# Swipe for Letterboxd v6.2
+# Swipe for Letterboxd v6.3.0-beta.1
 
 > Formerly **Vypode for Letterboxd** — renamed to **Swipe for Letterboxd** in v6.1.0. Internal storage keys and APIs are unchanged, so existing local data carries over.
 
 
 A Chrome extension that adds a swipe-style interface and a local profile database for Letterboxd. It helps you move through films quickly, hide titles you have already handled, and search your own watched history by title, rating, liked status, and review text where Letterboxd exposes it.
+
+## What's New in v6.3.0-beta.1
+
+- **Automatic real page navigation (beta)** — Settings → Deck Behaviour now
+  includes *Open next Letterboxd page automatically*. When enabled, advancing
+  past the final card follows Letterboxd's real Next link in the same tab and
+  reopens Swipe Deck after the new page loads.
+- **Safe by default** — the setting is opt-in. With it disabled, v6.2's
+  continuous in-place page loading is unchanged.
+- **Undo-safe transitions** — automatic navigation waits until the five-second
+  Undo window has closed and waits for queued Letterboxd actions before leaving
+  the page. Closing Swipe or disabling the setting cancels a pending move.
+- **Pagination guardrails** — only a different, same-origin Letterboxd Next URL
+  is followed. Fully filtered pages continue with a ten-jump loop guard, and
+  the deck stops normally when there is no next page.
 
 ## What's New in v6.2.0
 
@@ -51,6 +66,14 @@ A Chrome extension that adds a swipe-style interface and a local profile databas
 There is no third-party cloud backup in this release. Your film registry is stored in Chrome storage on this device; only small filter preferences use Chrome's built-in sync storage when available.
 
 ## Installation
+
+### Testing v6.3.0-beta.1
+
+1. Download and unzip `swipe-for-letterboxd-v6.3.0-beta.1.zip` from the beta release.
+2. Open `chrome://extensions/`, enable **Developer mode**, and choose **Load unpacked**.
+3. Select the unzipped folder containing `manifest.json`.
+4. Open a Letterboxd listing, launch **Swipe Deck**, then open **Settings → Deck Behaviour**.
+5. Enable **Open next Letterboxd page automatically**. On the final card, Swipe follows the real Next link and reopens the deck on the new page.
 
 ### From Chrome Web Store
 

@@ -1,4 +1,4 @@
-// SWIPE FOR LETTERBOXD — FilmState Registry v6.2.0
+// SWIPE FOR LETTERBOXD — FilmState Registry v6.3.0-beta.1
 // Persistent film state keyed by slug, stored in chrome.storage.local
 // Loaded before content.js — exposes window.VypodeFilmState
 
@@ -9,12 +9,15 @@
   const PREFS_KEY = 'vypode_prefs';
   const DATA_VERSION = 2;
 
-  // Default filter preferences (synced across devices via chrome.storage.sync)
+  // User preferences (synced across devices via chrome.storage.sync)
   const DEFAULT_PREFS = {
     excludeWatched: true,
     excludeLiked: true,
     excludeWatchlist: true,
-    excludeSkipped: true
+    excludeSkipped: true,
+    // Opt-in so installing the beta never changes page navigation without
+    // the user deliberately enabling it in Settings.
+    autoNextPage: false
   };
 
   // ── In-memory registry ──────────────────────────────────────────────

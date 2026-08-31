@@ -1,10 +1,11 @@
-// SWIPE FOR LETTERBOXD — Content Script v6.2.0
+// SWIPE FOR LETTERBOXD — Content Script v6.3.0-beta.1
 // Background actions + auto-advance + auto-next-page + Voice Review + Star Rating
 // v6.0.0: FilmState registry, fresh poster filtering, durable skip,
 //         account awareness, collection sync, settings panel, local profile database
 // v6.0.1: corrupted-storage load safety, 429/503 sync backoff, throttled review fan-out
 // v6.0.2: same-instant reconcile/userAction tie-break, adaptive debounce for large libraries
-// v6.2.0: rebrand Vypode → "Swipe for Letterboxd" (user-facing strings only)
+// v6.1.0: rebrand Vypode → "Swipe for Letterboxd" (user-facing strings only)
+// v6.3.0-beta.1: optional automatic navigation to the next Letterboxd page
 (function() {
   'use strict';
   if (window.vypodeInjected) return;
@@ -429,12 +430,52 @@
     }
   }
 
-  function getNextPageUrl() {
-    const nextLink = document.querySelector('.paginate-nextprev a.next') ||
-                     document.querySelector('a[rel="next"]') ||
-                     document.querySelector('.pagination a.next');
-    if (nextLink?.href) return nextLink.href;
-    return null;
+  function findNextPageLink(root) {
+    const scope = root || document;
+    const selectors = [
+      '.paginate-nextprev a.next',
+      'a[rel="next"]',
+      '.pagination a.next',
+      '.pagination a[aria-label="Next"]',
+      '.pagination a[aria-label="Next page"]',
+      'a.pagination-next',
+      'a.next[href*="/page/"]'
+    ];
+    for (const selector of selectors) {
+      const link = scope.querySelector(selector);
+      if (link && !link.closest?.('.vypode-overlay')) return link;
+    }
+
+    // Letterboxd has changed pagination markup more than once. Keep a narrow
+    // accessible-text fallback, but require a numbered page URL so unrelated
+    // "Next" links can never be followed.
+    return Array.from(scope.querySelectorAll('a[href*="/page/"]')).find(link => {
+      if (link.closest?.('.vypode-overlay')) return false;
+      const label = [
+        link.getAttribute('aria-label'),
+        link.getAttribute('title'),
+        link.textContent
+      ].filter(Boolean).join(' ');
+      return /\bnext(?:\s+page)?\b/i.test(label);
+    }) || null;
+  }
+
+  function getNextPageUrl(root, baseUrl) {
+    const nextLink = findNextPageLink(root);
+    const href = nextLink?.getAttribute?.('href') || nextLink?.href;
+    if (!href) return null;
+    try {
+      const source = new URL(baseUrl || window.location.href, window.location.href);
+      const destination = new URL(href, source.href);
+      const current = new URL(window.location.href);
+      if (destination.origin !== current.origin) return null;
+      destination.hash = '';
+      source.hash = '';
+      if (destination.href === source.href) return null;
+      return destination.href;
+    } catch (e) {
+      return null;
+    }
   }
 
   // ── Action buttons (single film page) ──────────────────────────────
@@ -581,6 +622,7 @@
         showFeedback('Already synced to Letterboxd', 'watchlist');
         return;
       }
+      cancelPendingPageNavigation();
       // Undo: revert optimistic state
       if (action === 'watch') film.isWatched = false;
       else if (action === 'like') film.isLiked = false;
@@ -616,7 +658,8 @@
         isProcessingAction = false;
       }, 200);
     } else {
-      advanceToNextCard();
+      // Keep the five-second Undo window available before leaving this page.
+      advanceToNextCard({ afterUndoWindow: true });
       isProcessingAction = false;
     }
   }
@@ -635,21 +678,35 @@
     actionIframe = iframe;
 
     const finishQueueItem = () => {
+      // cleanupIframe() can abandon this item while one of its delayed
+      // callbacks is still pending. Never let that stale callback release a
+      // newer item's global queue lock after the deck has been reopened.
+      if (activeQueueItem !== item) return;
       if (actionIframe === iframe) actionIframe = null;
       if (iframeTimeout === timeout) iframeTimeout = null;
-      if (activeQueueItem === item) activeQueueItem = null;
+      activeQueueItem = null;
       isProcessingQueue = false;
       processActionQueue();
     };
 
+    let failureHandled = false;
     const onFail = () => {
+      if (failureHandled) return;
+      failureHandled = true;
+      clearTimeout(timeout);
       iframe.remove();
       if (actionIframe === iframe) actionIframe = null;
       if (iframeTimeout === timeout) iframeTimeout = null;
-      if (activeQueueItem === item) activeQueueItem = null;
       // Retry up to 3 times with increasing delay
       if (retries < 3) {
         setTimeout(() => {
+          // Keep the failed item active during retry backoff so Undo can still
+          // cancel it. cleanupIframe() also marks it cancelled on deck close.
+          if (item.cancelled) {
+            finishQueueItem();
+            return;
+          }
+          if (activeQueueItem === item) activeQueueItem = null;
           item.retries = retries + 1;
           actionQueue.push(item);
           isProcessingQueue = false;
@@ -860,11 +917,84 @@
 
   // ── Deck navigation ─────────────────────────────────────────────────
 
-  // Track the current next-page URL (updated as we load more pages)
+  // The v6.2 in-place loader remains the default. The beta option chooses a
+  // real Letterboxd page navigation instead, then reopens the deck there.
   let currentNextPageUrl = null;
   let isLoadingMore = false;
+  let isNavigatingPage = false;
+  let pageNavigationTimer = null;
+  let pageNavigationGeneration = 0;
+  const MAX_AUTO_RESUME_PAGES = 10;
 
-  function advanceToNextCard() {
+  function isAutoNextPageEnabled() {
+    return window.VypodeFilmState?.getPrefs?.().autoNextPage === true;
+  }
+
+  function deckResumeUrl(url, resumeHop) {
+    try {
+      const destination = new URL(url, window.location.href);
+      const hop = Number.isInteger(resumeHop) && resumeHop > 0
+        ? Math.min(resumeHop, MAX_AUTO_RESUME_PAGES)
+        : 0;
+      destination.hash = hop > 0 ? `vypode-auto=${hop}` : 'vypode-auto';
+      return destination.href;
+    } catch (e) {
+      return url;
+    }
+  }
+
+  function cancelPendingPageNavigation() {
+    pageNavigationGeneration++;
+    if (pageNavigationTimer) {
+      clearTimeout(pageNavigationTimer);
+      pageNavigationTimer = null;
+    }
+    isNavigatingPage = false;
+  }
+
+  function navigateToNextPage(url, options) {
+    // A second terminal action gets its own complete Undo window. Replace the
+    // earlier schedule instead of letting it navigate during the newer toast.
+    if (isNavigatingPage && options?.afterUndoWindow) {
+      cancelPendingPageNavigation();
+    } else if (isNavigatingPage) {
+      return;
+    }
+    isNavigatingPage = true;
+    const generation = ++pageNavigationGeneration;
+    const destination = deckResumeUrl(url, options?.resumeHop);
+    const delayMs = options?.afterUndoWindow ? 5200 : 0;
+    const requirePreference = options?.requirePreference !== false;
+
+    const beginNavigation = () => {
+      pageNavigationTimer = null;
+      if (generation !== pageNavigationGeneration) return;
+      if (requirePreference && !isAutoNextPageEnabled()) {
+        cancelPendingPageNavigation();
+        return;
+      }
+      showFeedback('Opening the next Letterboxd page...', 'watch');
+
+      // Actions run in background iframes. Give them time to commit before the
+      // real page navigation tears down this content-script instance.
+      waitForQueueDrain(() => {
+        if (generation !== pageNavigationGeneration || !isNavigatingPage) return;
+        // If a browser beforeunload handler blocks this assignment for any
+        // reason, leave the feature retryable instead of permanently latched.
+        isNavigatingPage = false;
+        window.location.href = destination;
+      }, 0, () => {
+        if (generation !== pageNavigationGeneration) return;
+        cancelPendingPageNavigation();
+        showFeedback('Still syncing actions — try Next page again shortly', 'error');
+      });
+    };
+
+    if (delayMs > 0) pageNavigationTimer = setTimeout(beginNavigation, delayMs);
+    else beginNavigation();
+  }
+
+  function advanceToNextCard(options) {
     if (currentDeckIndex < filmDeck.length - 1) {
       currentDeckIndex++;
       updateDeckCard();
@@ -875,10 +1005,12 @@
       preloadNextPosters(currentDeckIndex + 1, 10);
     } else {
       const nextUrl = currentNextPageUrl || getNextPageUrl();
-      if (nextUrl) {
-        loadNextPageFilms(nextUrl);
-      } else {
+      if (!nextUrl) {
         showFeedback('All done! No more pages.', 'watchlist');
+      } else if (isAutoNextPageEnabled()) {
+        navigateToNextPage(nextUrl, { afterUndoWindow: options?.afterUndoWindow === true });
+      } else {
+        loadNextPageFilms(nextUrl);
       }
     }
   }
@@ -894,20 +1026,11 @@
 
       const html = await response.text();
       const doc = new DOMParser().parseFromString(html, 'text/html');
-
-      // Extract films from the fetched page DOM
       const newFilms = extractFilmsFromDoc(doc);
       masterDeck.push(...newFilms);
       const filtered = filterFilmDeck(newFilms);
 
-      // Update the next-page URL from the fetched document
-      const nextLink = doc.querySelector('.paginate-nextprev a.next') || doc.querySelector('a[rel="next"]');
-      if (nextLink) {
-        const href = nextLink.getAttribute('href');
-        currentNextPageUrl = href.startsWith('http') ? href : 'https://letterboxd.com' + href;
-      } else {
-        currentNextPageUrl = null;
-      }
+      currentNextPageUrl = getNextPageUrl(doc, url);
 
       if (filtered.length > 0) {
         filmDeck.push(...filtered);
@@ -915,11 +1038,11 @@
         updateDeckCard();
         updateProgress();
         enrichFilmData(filmDeck[currentDeckIndex]);
-        enrichFilmData(filmDeck[currentDeckIndex + 1]); // pre-warm the next card's metadata
+        enrichFilmData(filmDeck[currentDeckIndex + 1]);
         preloadNextPosters(currentDeckIndex + 1, 10);
         showFeedback('Loaded ' + filtered.length + ' more films', 'watchlist');
       } else if (currentNextPageUrl) {
-        // All films on this page were filtered — try the next one
+        // All films on this page were filtered — try the next one.
         isLoadingMore = false;
         loadNextPageFilms(currentNextPageUrl);
         return;
@@ -927,25 +1050,27 @@
         showFeedback('All done! No more pages.', 'watchlist');
       }
     } catch (e) {
-      // Fallback: full page navigation
+      // Dynamic Letterboxd grids may not exist in fetched source HTML. A real
+      // navigation lets Letterboxd hydrate the page normally, then resumes.
       showFeedback('Syncing actions & loading next page...', 'watch');
-      waitForQueueDrain(() => { window.location.href = url + '#vypode-auto'; });
+      navigateToNextPage(url, { requirePreference: false });
     }
 
     isLoadingMore = false;
   }
 
   function extractFilmsFromDoc(doc) {
-    // Skip films already collected into the deck (across auto-paged loads).
     return extractListingFilms(doc, { skipSlugs: new Set(masterDeck.map(f => f.slug)) });
   }
 
-  function waitForQueueDrain(callback, elapsed) {
+  function waitForQueueDrain(callback, elapsed, timeoutCallback) {
     elapsed = elapsed || 0;
-    if ((actionQueue.length === 0 && !isProcessingQueue) || elapsed >= 15000) {
+    if (actionQueue.length === 0 && !isProcessingQueue) {
       callback();
+    } else if (elapsed >= 60000) {
+      timeoutCallback?.();
     } else {
-      setTimeout(function() { waitForQueueDrain(callback, elapsed + 200); }, 200);
+      setTimeout(function() { waitForQueueDrain(callback, elapsed + 200, timeoutCallback); }, 200);
     }
   }
 
@@ -963,6 +1088,7 @@
     }
 
     showUndoToast('Skipped', 'skip', () => {
+      cancelPendingPageNavigation();
       film.actioned = false;
       if (film.slug && window.VypodeFilmState) {
         window.VypodeFilmState.setFlag(film.slug, 'skipped', false, 'userAction');
@@ -988,7 +1114,8 @@
         isProcessingAction = false;
       }, 200);
     } else {
-      advanceToNextCard();
+      // Keep the five-second Undo window available before leaving this page.
+      advanceToNextCard({ afterUndoWindow: true });
       isProcessingAction = false;
     }
   }
@@ -1606,6 +1733,17 @@
           </label>
         </div>
 
+        <!-- Deck Behaviour Section -->
+        <div class="vypode-settings-section">
+          <div class="vypode-settings-section-title">Deck Behaviour</div>
+          <label class="vypode-toggle-row">
+            <span>Open next Letterboxd page automatically</span>
+            <input type="checkbox" class="vypode-toggle" data-pref="autoNextPage" ${prefs.autoNextPage === true ? 'checked' : ''}>
+            <span class="vypode-toggle-slider"></span>
+          </label>
+          <div class="vypode-settings-hint">After the last card, follows Letterboxd's Next link in this tab and reopens Swipe Deck.</div>
+        </div>
+
         <!-- Stats Section -->
         <div class="vypode-settings-section">
           <div class="vypode-settings-section-title">Your Film Registry</div>
@@ -1670,7 +1808,7 @@
           <input type="file" id="vypodeImportFile" accept=".json" style="display:none">
         </div>
 
-        <div class="vypode-settings-footer">Swipe for Letterboxd v6.2.0</div>
+        <div class="vypode-settings-footer">Swipe for Letterboxd v6.3.0-beta.1</div>
       </div>
     `;
 
@@ -1686,7 +1824,10 @@
       toggle.addEventListener('change', () => {
         const pref = toggle.dataset.pref;
         window.VypodeFilmState?.setPref(pref, toggle.checked);
-        if (isListingPage) {
+        if (pref === 'autoNextPage' && !toggle.checked) {
+          cancelPendingPageNavigation();
+        }
+        if (pref.startsWith('exclude') && isListingPage) {
           const currentSlug = filmDeck[currentDeckIndex]?.slug;
           // Re-filter from the accumulated master deck so films collected via
           // auto-paging survive a filter change (re-scraping the DOM would
@@ -1953,7 +2094,13 @@
     createVypodeOverlay(film, states, false);
   }
 
-  async function createVypodeDeckUI() {
+  async function createVypodeDeckUI(options) {
+    const autoResumeHop = Number.isInteger(options?.autoResumeHop)
+      ? Math.max(0, Math.min(options.autoResumeHop, MAX_AUTO_RESUME_PAGES))
+      : null;
+    cancelPendingPageNavigation();
+    currentNextPageUrl = null;
+    isLoadingMore = false;
     let allFilms = getFilmsFromListing();
     if (allFilms.length === 0) {
       // Listing grids are often AJAX-loaded after our button appears — wait
@@ -1975,6 +2122,16 @@
     filmDeck = filterFilmDeck(allFilms);
 
     if (filmDeck.length === 0) {
+      const nextUrl = getNextPageUrl();
+      if (autoResumeHop !== null && isAutoNextPageEnabled() && nextUrl && autoResumeHop < MAX_AUTO_RESUME_PAGES) {
+        showFeedback('This page is fully filtered — opening the next page...', 'watch');
+        navigateToNextPage(nextUrl, { resumeHop: autoResumeHop + 1 });
+        return;
+      }
+      if (autoResumeHop === MAX_AUTO_RESUME_PAGES && nextUrl) {
+        showFeedback(`Stopped after ${MAX_AUTO_RESUME_PAGES} automatic page jumps — use Next to continue`, 'watchlist');
+        return;
+      }
       showFeedback(`All ${allFilms.length} films already in your collections — nothing new here!`, 'watchlist');
       return;
     }
@@ -2200,6 +2357,7 @@
 
   function goToPrevCard() {
     if (currentDeckIndex > 0) {
+      cancelPendingPageNavigation();
       currentDeckIndex--;
       updateDeckCard();
     }
@@ -2488,6 +2646,7 @@
   }
 
   function hideVypode() {
+    cancelPendingPageNavigation();
     hideReviewPanel();
     hideSettingsPanel();
     const overlay = document.querySelector('.vypode-overlay');
@@ -2555,9 +2714,27 @@
     });
 
     // Auto-open deck from next-page navigation
-    if (window.location.hash === '#vypode-auto') {
-      window.location.hash = '';
-      setTimeout(() => { createToggleButton(); createVypodeDeckUI(); }, 1500);
+    const autoResumeMatch = window.location.hash.match(/^#vypode-auto(?:=(\d+))?$/);
+    if (autoResumeMatch) {
+      const autoResumeHop = Math.min(
+        Number.parseInt(autoResumeMatch[1] || '0', 10) || 0,
+        MAX_AUTO_RESUME_PAGES
+      );
+      // Remove the private resume marker without adding a same-page entry to
+      // browser history. Keep a fallback for lightweight test/older runtimes.
+      if (window.history?.replaceState) {
+        window.history.replaceState(
+          window.history.state,
+          '',
+          window.location.pathname + window.location.search
+        );
+      } else {
+        window.location.hash = '';
+      }
+      setTimeout(() => {
+        createToggleButton();
+        createVypodeDeckUI({ autoResumeHop });
+      }, 1500);
       return;
     }
 

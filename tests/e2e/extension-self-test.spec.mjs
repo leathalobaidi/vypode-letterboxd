@@ -208,7 +208,7 @@ test('popup renders linked account, version, and registry stats from extension s
 
   assert.equal(text(window.document, '#accountName'), 'BusyBees1');
   assert.equal(text(window.document, '#accountStatus'), 'Linked');
-  assert.equal(text(window.document, '.version'), 'v6.1.0');
+  assert.equal(text(window.document, '.version'), 'v6.3.0-beta.1');
   assert.equal(text(window.document, '#statWatched'), '2');
   assert.equal(text(window.document, '#statLiked'), '1');
   assert.equal(text(window.document, '#statWatchlist'), '1');
