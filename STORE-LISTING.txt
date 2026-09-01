@@ -1,4 +1,4 @@
-SWIPE FOR LETTERBOXD — CHROME WEB STORE LISTING (v6.3.0-beta.1)
+SWIPE FOR LETTERBOXD — CHROME WEB STORE LISTING (v6.3.0-beta.2)
 ================================================================
 (Formerly "Vypode for Letterboxd". Internal storage keys/APIs unchanged.)
 Upload: zip the repo root (the folder containing manifest.json) as a new package

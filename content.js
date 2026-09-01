@@ -1,11 +1,11 @@
-// SWIPE FOR LETTERBOXD — Content Script v6.3.0-beta.1
+// SWIPE FOR LETTERBOXD — Content Script v6.3.0-beta.2
 // Background actions + auto-advance + auto-next-page + Voice Review + Star Rating
 // v6.0.0: FilmState registry, fresh poster filtering, durable skip,
 //         account awareness, collection sync, settings panel, local profile database
 // v6.0.1: corrupted-storage load safety, 429/503 sync backoff, throttled review fan-out
 // v6.0.2: same-instant reconcile/userAction tie-break, adaptive debounce for large libraries
 // v6.1.0: rebrand Vypode → "Swipe for Letterboxd" (user-facing strings only)
-// v6.3.0-beta.1: optional automatic navigation to the next Letterboxd page
+// v6.3.0-beta.2: optional automatic navigation to the next Letterboxd page
 (function() {
   'use strict';
   if (window.vypodeInjected) return;
@@ -434,30 +434,39 @@
     const scope = root || document;
     const selectors = [
       '.paginate-nextprev a.next',
-      'a[rel="next"]',
+      '.paginate-nextprev .next a[href]',
+      'a[rel~="next"][href]',
       '.pagination a.next',
       '.pagination a[aria-label="Next"]',
       '.pagination a[aria-label="Next page"]',
       'a.pagination-next',
-      'a.next[href*="/page/"]'
+      'a.next[href*="/page/"]',
+      'link[rel~="next"][href]'
     ];
     for (const selector of selectors) {
       const link = scope.querySelector(selector);
       if (link && !link.closest?.('.vypode-overlay')) return link;
     }
 
-    // Letterboxd has changed pagination markup more than once. Keep a narrow
-    // accessible-text fallback, but require a numbered page URL so unrelated
-    // "Next" links can never be followed.
-    return Array.from(scope.querySelectorAll('a[href*="/page/"]')).find(link => {
-      if (link.closest?.('.vypode-overlay')) return false;
-      const label = [
-        link.getAttribute('aria-label'),
-        link.getAttribute('title'),
-        link.textContent
-      ].filter(Boolean).join(' ');
-      return /\bnext(?:\s+page)?\b/i.test(label);
-    }) || null;
+    // Letterboxd has changed pagination markup more than once. Keep the
+    // accessible-text fallback inside pagination containers so query/cursor
+    // URLs work without treating unrelated "Next" links as pagination.
+    const paginationScopes = scope.querySelectorAll(
+      '.paginate-nextprev, .pagination, nav[aria-label*="Pagination"], nav[aria-label*="pagination"]'
+    );
+    for (const pagination of paginationScopes) {
+      const link = Array.from(pagination.querySelectorAll('a[href]')).find(candidate => {
+        if (candidate.closest?.('.vypode-overlay')) return false;
+        const label = [
+          candidate.getAttribute('aria-label'),
+          candidate.getAttribute('title'),
+          candidate.textContent
+        ].filter(Boolean).join(' ');
+        return /\bnext(?:\s+page)?\b/i.test(label);
+      });
+      if (link) return link;
+    }
+    return null;
   }
 
   function getNextPageUrl(root, baseUrl) {
@@ -588,7 +597,10 @@
     const previousValue = action === 'watch' ? film.isWatched : action === 'like' ? film.isLiked : film.inWatchlist;
     if (previousValue) {
       showFeedback(action === 'watch' ? 'Already watched' : action === 'like' ? 'Already liked' : 'Already in Watchlist', action);
-      isProcessingAction = false;
+      // The action needs no Letterboxd request, but it should still consume
+      // the card. This is especially important on the final card, where the
+      // shared advance path triggers optional next-page navigation.
+      advanceDeckAfterAction(dirMap[action]);
       return;
     }
 
@@ -642,10 +654,15 @@
     actionQueue.push(queueItem);
     processActionQueue();
 
-    // Visual flyoff + next-card rise, parallel with action queue
+    // Visual flyoff + next-card rise, parallel with action queue. On the final
+    // card, keep the Undo window available before leaving this page.
+    advanceDeckAfterAction(dirMap[action], { afterUndoWindow: true });
+  }
+
+  function advanceDeckAfterAction(direction, options) {
     const hasNext = currentDeckIndex < filmDeck.length - 1;
     if (hasNext) {
-      runSwipeAnimation(dirMap[action]);
+      runSwipeAnimation(direction);
       currentDeckIndex++;
       updateProgress();
       enrichFilmData(filmDeck[currentDeckIndex]);
@@ -658,8 +675,7 @@
         isProcessingAction = false;
       }, 200);
     } else {
-      // Keep the five-second Undo window available before leaving this page.
-      advanceToNextCard({ afterUndoWindow: true });
+      advanceToNextCard(options);
       isProcessingAction = false;
     }
   }
@@ -1026,7 +1042,15 @@
 
       const html = await response.text();
       const doc = new DOMParser().parseFromString(html, 'text/html');
-      const newFilms = extractFilmsFromDoc(doc);
+      const pageFilms = extractListingFilms(doc);
+      if (pageFilms.length === 0) {
+        // Current Letterboxd listing responses can be an HTTP-200 CSI shell
+        // whose film grid appears only after browser hydration. Navigate to
+        // the already validated Next URL so Letterboxd can render it normally.
+        throw new Error('Fetched page contains no extractable films');
+      }
+      const existingSlugs = new Set(masterDeck.map(film => film.slug));
+      const newFilms = pageFilms.filter(film => !existingSlugs.has(film.slug));
       masterDeck.push(...newFilms);
       const filtered = filterFilmDeck(newFilms);
 
@@ -1057,10 +1081,6 @@
     }
 
     isLoadingMore = false;
-  }
-
-  function extractFilmsFromDoc(doc) {
-    return extractListingFilms(doc, { skipSlugs: new Set(masterDeck.map(f => f.slug)) });
   }
 
   function waitForQueueDrain(callback, elapsed, timeoutCallback) {
@@ -1808,7 +1828,7 @@
           <input type="file" id="vypodeImportFile" accept=".json" style="display:none">
         </div>
 
-        <div class="vypode-settings-footer">Swipe for Letterboxd v6.3.0-beta.1</div>
+        <div class="vypode-settings-footer">Swipe for Letterboxd v6.3.0-beta.2</div>
       </div>
     `;
 

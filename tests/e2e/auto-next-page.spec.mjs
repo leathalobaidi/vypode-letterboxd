@@ -54,18 +54,24 @@ function signedInHeader(username = 'BusyBees1') {
   </header>`;
 }
 
-function poster(slug, title) {
+function poster(slug, title, states = {}) {
+  const overlay = states.inWatchlist
+    ? '<div class="film-poster-overlay"><span class="action -watchlist -on"></span></div>'
+    : '';
   return `<li class="poster-container"><div class="film-poster">
     <a href="/film/${slug}/"><img alt="Poster for ${title}" src="https://img.test/${slug}.jpg"></a>
+    ${overlay}
   </div></li>`;
 }
 
-function listingPage({ films = [], nextHref = null } = {}) {
-  const pagination = nextHref === null
-    ? ''
-    : `<div class="paginate-nextprev"><a class="next" rel="next" href="${nextHref}">Next</a></div>`;
-  return `<html><body>${signedInHeader()}
-    <ul class="poster-list">${films.map(film => poster(film.slug, film.title)).join('')}</ul>
+function listingPage({ films = [], nextHref = null, headHtml = '', paginationHtml = null } = {}) {
+  const pagination = paginationHtml === null
+    ? (nextHref === null
+        ? ''
+        : `<div class="paginate-nextprev"><a class="next" rel="next" href="${nextHref}">Next</a></div>`)
+    : paginationHtml;
+  return `<html><head>${headHtml}</head><body>${signedInHeader()}
+    <ul class="poster-list">${films.map(film => poster(film.slug, film.title, film)).join('')}</ul>
     ${pagination}
   </body></html>`;
 }
@@ -260,6 +266,33 @@ test('undo on the last card cancels pending automatic page navigation', async ()
   assert.equal(window.document.querySelector('#vypodeCard .vypode-card-title')?.textContent, 'Only Film (2024)');
 });
 
+test('an already-active action on the final card still advances to the next page', async () => {
+  const alreadyWatchlistedPage = listingPage({
+    films: [{ slug: 'already-watchlisted', title: 'Already Watchlisted (2024)', inWatchlist: true }],
+    nextHref: '/films/popular/page/2/'
+  });
+  const { window } = await runContent(alreadyWatchlistedPage, firstPageUrl, {
+    sync: {
+      vypode_prefs: {
+        autoNextPage: true,
+        excludeWatchlist: false
+      }
+    }
+  });
+  click(window.document, '.vypode-toggle-btn');
+  assert.equal(await waitFor(() => window.document.querySelector('#vypodeCard')), true);
+  assert.match(window.document.querySelector('#vypodeCard .vypode-card-states')?.textContent || '', /In Watchlist/);
+
+  const addToWatchlist = new window.Event('keydown', { bubbles: true });
+  Object.defineProperty(addToWatchlist, 'key', { value: 'ArrowRight' });
+  window.document.dispatchEvent(addToWatchlist);
+
+  assert.equal(await waitFor(() => window.location.pathname === '/films/popular/page/2/'), true);
+  assert.equal(window.location.hash, '#vypode-auto');
+  assert.equal(window.document.querySelectorAll('iframe').length, 0,
+    'an already-active action should advance without sending a duplicate Letterboxd action');
+});
+
 test('Prev after a last-card skip cancels pending automatic page navigation', async () => {
   const { window } = await runContent(firstPage, firstPageUrl, {
     sync: { vypode_prefs: { autoNextPage: true } }
@@ -376,6 +409,62 @@ test('disabled autoNextPage preserves v6.2 in-place next-page loading', async ()
   assert.equal(await waitFor(() => calls.some(url => new NativeURL(url, firstPageUrl).pathname === '/films/popular/page/2/')), true);
   assert.equal(await waitFor(() => window.document.querySelector('#vypodeCard .vypode-card-title')?.textContent === 'Page Two Film (2024)'), true);
   assert.equal(window.location.href, firstPageUrl);
+});
+
+test('an HTTP-200 dynamic listing shell falls back to real page navigation', async () => {
+  const dynamicShell = '<html><body><div data-src="/csi/films/films-browser-list/"></div></body></html>';
+  const { window, calls } = await runContent(firstPage, firstPageUrl, { page2Html: dynamicShell });
+  await openTwoFilmDeck(window);
+  await exhaustWithNextButtons(window);
+
+  assert.equal(calls.some(url => new NativeURL(url, firstPageUrl).pathname === '/films/popular/page/2/'), true);
+  assert.equal(await waitFor(() => window.location.pathname === '/films/popular/page/2/'), true);
+  assert.equal(window.location.hash, '#vypode-auto');
+});
+
+test('autoNextPage recognizes head, nested, and cursor pagination markup', async () => {
+  const cases = [
+    {
+      page: listingPage({
+        films: [
+          { slug: 'head-a', title: 'Head A (2020)' },
+          { slug: 'head-b', title: 'Head B (2021)' }
+        ],
+        headHtml: '<link rel="next" href="?cursor=head-token">',
+        paginationHtml: ''
+      }),
+      expected: 'https://letterboxd.com/films/popular/?cursor=head-token#vypode-auto'
+    },
+    {
+      page: listingPage({
+        films: [
+          { slug: 'nested-a', title: 'Nested A (2020)' },
+          { slug: 'nested-b', title: 'Nested B (2021)' }
+        ],
+        paginationHtml: '<div class="paginate-nextprev"><span class="next"><a href="?cursor=nested-token">Next</a></span></div>'
+      }),
+      expected: 'https://letterboxd.com/films/popular/?cursor=nested-token#vypode-auto'
+    },
+    {
+      page: listingPage({
+        films: [
+          { slug: 'cursor-a', title: 'Cursor A (2020)' },
+          { slug: 'cursor-b', title: 'Cursor B (2021)' }
+        ],
+        paginationHtml: '<nav aria-label="Pagination"><a href="?cursor=structural-token">Next page</a></nav>'
+      }),
+      expected: 'https://letterboxd.com/films/popular/?cursor=structural-token#vypode-auto'
+    }
+  ];
+
+  for (const { page, expected } of cases) {
+    const { window } = await runContent(page, firstPageUrl, {
+      sync: { vypode_prefs: { autoNextPage: true } }
+    });
+    await openTwoFilmDeck(window);
+    await exhaustWithNextButtons(window);
+    assert.equal(window.location.href, expected);
+  }
 });
 
 test('autoNextPage refuses cross-origin and same-page pagination targets', async () => {
