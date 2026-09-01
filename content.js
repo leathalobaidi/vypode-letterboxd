@@ -1,11 +1,12 @@
-// SWIPE FOR LETTERBOXD — Content Script v6.3.0-beta.3
-// Background actions + auto-advance + auto-next-page + Trailer shortcut + Voice Review + Star Rating
+// SWIPE FOR LETTERBOXD — Content Script v6.3.0-beta.4
+// Background actions + auto-advance + auto-next-page + Trailer keyboard playback + Voice Review + Star Rating
 // v6.0.0: FilmState registry, fresh poster filtering, durable skip,
 //         account awareness, collection sync, settings panel, local profile database
 // v6.0.1: corrupted-storage load safety, 429/503 sync backoff, throttled review fan-out
 // v6.0.2: same-instant reconcile/userAction tie-break, adaptive debounce for large libraries
 // v6.1.0: rebrand Vypode → "Swipe for Letterboxd" (user-facing strings only)
 // v6.3.0-beta.3: trailer shortcut and resilient review dictation
+// v6.3.0-beta.4: cold-start and toggle trailer playback with K or Space
 (function() {
   'use strict';
   if (window.vypodeInjected) return;
@@ -41,8 +42,14 @@
   let speechStopTimer = null;
   let speechStopPromise = null;
   let resolveSpeechStop = null;
+  let trailerPlayerObserver = null;
+  let trailerPlayerObserverTimer = null;
+  let trailerPlaybackPhase = 'idle';
+  let trailerPlaybackDesired = 'paused';
+  let trailerKeyboardFrame = null;
   const SPEECH_START_TIMEOUT_MS = 30000;
   const SPEECH_STOP_TIMEOUT_MS = 4000;
+  const TRAILER_PLAYER_WAIT_MS = 4000;
 
   // Account state
   let letterboxdUsername = null;
@@ -80,6 +87,214 @@
     const slug = String(film?.slug || '');
     if (!/^[a-z0-9][a-z0-9-]*$/i.test(slug)) return '';
     return `https://letterboxd.com/film/${slug}/trailer/`;
+  }
+
+  function isTrailerPage() {
+    return /^\/film\/[a-z0-9][a-z0-9-]*\/trailer\/?$/i.test(window.location.pathname);
+  }
+
+  function getYouTubeEmbedUrl(element) {
+    if (!element) return null;
+    const rawSrc = element.getAttribute('src') || element.getAttribute('href') || '';
+    let url;
+    try {
+      url = new URL(rawSrc, window.location.href);
+    } catch {
+      return null;
+    }
+    const allowedHosts = new Set([
+      'youtube.com',
+      'www.youtube.com',
+      'youtube-nocookie.com',
+      'www.youtube-nocookie.com'
+    ]);
+    if (url.protocol !== 'https:' || !allowedHosts.has(url.hostname)) return null;
+    if (!/^\/embed\/[a-z0-9_-]+\/?$/i.test(url.pathname)) return null;
+    return url;
+  }
+
+  function getTrailerPlayerFrame() {
+    const frames = document.querySelectorAll(
+      '#colorbox.-video iframe.cboxIframe, #cboxLoadedContent iframe.cboxIframe'
+    );
+    return Array.from(frames).find(frame => getYouTubeEmbedUrl(frame)) || null;
+  }
+
+  function postYouTubeCommand(frame, targetOrigin, command) {
+    try {
+      frame?.contentWindow?.postMessage(
+        JSON.stringify({ event: 'command', func: command, args: [] }),
+        targetOrigin
+      );
+    } catch {}
+  }
+
+  function resetTrailerPlaybackSession() {
+    trailerPlaybackPhase = 'idle';
+    trailerPlaybackDesired = 'paused';
+    trailerKeyboardFrame = null;
+  }
+
+  function reconcileTrailerPlaybackSession(frame) {
+    if (trailerPlaybackPhase !== 'ready') return;
+    if (trailerKeyboardFrame !== frame || trailerKeyboardFrame?.isConnected === false) {
+      resetTrailerPlaybackSession();
+    }
+  }
+
+  function setTrailerPlaybackState(frame, shouldPlay) {
+    trailerPlaybackPhase = 'ready';
+    trailerPlaybackDesired = shouldPlay ? 'playing' : 'paused';
+    trailerKeyboardFrame = frame;
+    frame.dataset.vypodePlaybackRequested = trailerPlaybackDesired;
+  }
+
+  function requestTrailerPlayback(frame, targetOrigin, shouldPlay) {
+    setTrailerPlaybackState(frame, shouldPlay);
+    postYouTubeCommand(frame, targetOrigin, shouldPlay ? 'playVideo' : 'pauseVideo');
+  }
+
+  function configureTrailerPlayer(frame, desiredState) {
+    const url = getYouTubeEmbedUrl(frame);
+    if (!url) return false;
+    reconcileTrailerPlaybackSession(frame);
+
+    const allowTokens = (frame.getAttribute('allow') || '')
+      .split(';')
+      .map(token => token.trim())
+      .filter(Boolean);
+    if (!allowTokens.some(token => token.split(/\s+/)[0] === 'autoplay')) allowTokens.push('autoplay');
+    if (!allowTokens.some(token => token.split(/\s+/)[0] === 'encrypted-media')) allowTokens.push('encrypted-media');
+    frame.setAttribute('allow', allowTokens.join('; '));
+    if (!frame.getAttribute('title')) frame.setAttribute('title', 'YouTube trailer player');
+
+    const alreadyConfigured =
+      frame.dataset.vypodeKeyboardPlayer === 'true' &&
+      url.searchParams.get('enablejsapi') === '1';
+    const shouldPlay = desiredState === 'playing'
+      ? true
+      : desiredState === 'paused'
+        ? false
+        : !(alreadyConfigured && trailerPlaybackPhase === 'ready' && trailerPlaybackDesired === 'playing');
+    if (alreadyConfigured) {
+      requestTrailerPlayback(frame, url.origin, shouldPlay);
+      return true;
+    }
+
+    url.searchParams.set('enablejsapi', '1');
+    url.searchParams.set('autoplay', '1');
+    url.searchParams.set('origin', window.location.origin);
+    frame.dataset.vypodeKeyboardPlayer = 'true';
+    setTrailerPlaybackState(frame, shouldPlay);
+    frame.addEventListener('load', () => {
+      if (trailerPlaybackPhase !== 'ready' || trailerKeyboardFrame !== frame || frame.isConnected === false) return;
+      requestTrailerPlayback(
+        frame,
+        url.origin,
+        trailerPlaybackDesired === 'playing'
+      );
+    }, { once: true });
+    frame.setAttribute('src', url.href);
+    return true;
+  }
+
+  function clearTrailerPlayerWait(resetPending = false) {
+    if (trailerPlayerObserver) trailerPlayerObserver.disconnect();
+    if (trailerPlayerObserverTimer) clearTimeout(trailerPlayerObserverTimer);
+    trailerPlayerObserver = null;
+    trailerPlayerObserverTimer = null;
+    if (resetPending && trailerPlaybackPhase === 'pending') resetTrailerPlaybackSession();
+  }
+
+  function waitForTrailerPlayer() {
+    clearTrailerPlayerWait();
+    if (typeof MutationObserver === 'function') {
+      trailerPlayerObserver = new MutationObserver(() => {
+        const frame = getTrailerPlayerFrame();
+        if (!frame) return;
+        const desiredState = trailerPlaybackDesired;
+        clearTrailerPlayerWait();
+        configureTrailerPlayer(frame, desiredState);
+      });
+      trailerPlayerObserver.observe(document.documentElement, { childList: true, subtree: true });
+    }
+    trailerPlayerObserverTimer = setTimeout(() => clearTrailerPlayerWait(true), TRAILER_PLAYER_WAIT_MS);
+  }
+
+  function activateTrailerPlayer() {
+    const frame = getTrailerPlayerFrame();
+    reconcileTrailerPlaybackSession(frame);
+    if (frame) {
+      if (trailerPlaybackPhase === 'pending') {
+        trailerPlaybackDesired = trailerPlaybackDesired === 'playing' ? 'paused' : 'playing';
+        const desiredState = trailerPlaybackDesired;
+        clearTrailerPlayerWait();
+        return configureTrailerPlayer(frame, desiredState);
+      }
+      return configureTrailerPlayer(frame);
+    }
+
+    if (trailerPlaybackPhase === 'pending') {
+      trailerPlaybackDesired = trailerPlaybackDesired === 'playing' ? 'paused' : 'playing';
+      return true;
+    }
+
+    const trigger = Array.from(document.querySelectorAll(
+      '.js-watch-panel-trailer a.js-video-zoom[href]'
+    )).find(link => getYouTubeEmbedUrl(link));
+    if (!trigger) return false;
+    trailerPlaybackPhase = 'pending';
+    trailerPlaybackDesired = 'playing';
+    trailerKeyboardFrame = null;
+    waitForTrailerPlayer();
+    trigger.click();
+    const insertedFrame = getTrailerPlayerFrame();
+    if (insertedFrame) {
+      const desiredState = trailerPlaybackDesired;
+      clearTrailerPlayerWait();
+      configureTrailerPlayer(insertedFrame, desiredState);
+    }
+    return true;
+  }
+
+  function handleTrailerPageKeyDown(event) {
+    if (!isTrailerPage() || event.defaultPrevented || event.isComposing) return;
+    const isK = event.key === 'k' || event.key === 'K';
+    const isSpace = event.key === ' ' || event.code === 'Space';
+    const activePlayer = getTrailerPlayerFrame();
+    reconcileTrailerPlaybackSession(activePlayer);
+    const canToggleWithSpace = trailerPlaybackPhase === 'pending' || trailerPlaybackPhase === 'ready';
+    const isPlaybackKey = isK || (isSpace && canToggleWithSpace);
+    if (!isPlaybackKey) return;
+    if (event.metaKey || event.ctrlKey || event.altKey || event.shiftKey || event.repeat) return;
+    if (isUserTyping(event.target)) return;
+    if (!activateTrailerPlayer()) return;
+
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    document.getElementById('vypodeTrailerKeyHint')?.remove();
+    const message = trailerPlaybackDesired === 'paused'
+      ? 'Trailer paused — press K or Space to resume'
+      : 'Trailer playing — press K or Space to pause';
+    showFeedback(message, 'watchlist');
+  }
+
+  function setupTrailerPageShortcut() {
+    if (!isTrailerPage()) return;
+    document.removeEventListener('keydown', handleTrailerPageKeyDown, true);
+    document.addEventListener('keydown', handleTrailerPageKeyDown, true);
+    if (!document.getElementById('vypodeTrailerKeyHint')) {
+      const hint = document.createElement('div');
+      hint.id = 'vypodeTrailerKeyHint';
+      hint.className = 'vypode-trailer-key-hint';
+      hint.setAttribute('role', 'status');
+      hint.setAttribute('aria-live', 'polite');
+      hint.setAttribute('aria-atomic', 'true');
+      hint.setAttribute('aria-keyshortcuts', 'K Space');
+      hint.textContent = 'Press K to play trailer';
+      document.body.appendChild(hint);
+      setTimeout(() => hint.remove(), 8000);
+    }
   }
 
   function readCsrfToken(doc) {
@@ -1951,13 +2166,19 @@
     if (panel) { panel.classList.remove('visible'); setTimeout(() => panel.remove(), 300); }
   }
 
-  function isUserTyping() {
-    const el = document.activeElement;
+  function isEditableElement(el) {
     if (!el) return false;
     const tag = el.tagName;
-    if (tag === 'TEXTAREA' || tag === 'INPUT') return true;
+    if (tag === 'TEXTAREA' || tag === 'INPUT' || tag === 'SELECT') return true;
     if (el.isContentEditable) return true;
+    const contentEditable = el.getAttribute?.('contenteditable');
+    if (contentEditable !== null && contentEditable !== undefined && contentEditable !== 'false') return true;
+    if (el.closest?.('[contenteditable]:not([contenteditable="false"])')) return true;
     return false;
+  }
+
+  function isUserTyping(eventTarget) {
+    return isEditableElement(eventTarget) || isEditableElement(document.activeElement);
   }
 
   // ==================== SETTINGS PANEL ====================
@@ -2111,7 +2332,7 @@
           <input type="file" id="vypodeImportFile" accept=".json" style="display:none">
         </div>
 
-        <div class="vypode-settings-footer">Swipe for Letterboxd v6.3.0-beta.3</div>
+        <div class="vypode-settings-footer">Swipe for Letterboxd v6.3.0-beta.4</div>
       </div>
     `;
 
@@ -3067,6 +3288,8 @@
   }
 
   async function init() {
+    setupTrailerPageShortcut();
+
     // Initialize FilmState registry
     if (window.VypodeFilmState) {
       await window.VypodeFilmState.init();
@@ -3076,6 +3299,8 @@
     await initAccount();
 
     window.addEventListener('pagehide', () => {
+      clearTrailerPlayerWait(true);
+      resetTrailerPlaybackSession();
       window.VypodeFilmState?.flush?.();
     });
     window.addEventListener('beforeunload', (e) => {

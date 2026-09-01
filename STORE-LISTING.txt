@@ -1,4 +1,4 @@
-SWIPE FOR LETTERBOXD — CHROME WEB STORE LISTING (v6.3.0-beta.3)
+SWIPE FOR LETTERBOXD — CHROME WEB STORE LISTING (v6.3.0-beta.4)
 ================================================================
 (Formerly "Vypode for Letterboxd". Internal storage keys/APIs unchanged.)
 Upload: zip the repo root (the folder containing manifest.json) as a new package
@@ -31,7 +31,8 @@ WHAT IT DOES
   watchlist / rated / reviewed / genre / watched-date, then sort by rating, year,
   watched date, or title. Open any film for a detail view.
 • Trailers — Press T or use the Trailer control to open the current film's
-  Letterboxd trailer page without losing your place in the deck.
+  Letterboxd trailer page without losing your place in the deck. On that page,
+  press K to start the unopened YouTube trailer, then K or Space to pause/resume.
 • Quick review — Write and submit a star rating + review from the deck, with
   browser dictation where the browser supplies a working recognition service.
 

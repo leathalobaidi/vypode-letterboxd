@@ -1,9 +1,19 @@
-# Swipe for Letterboxd v6.3.0-beta.3
+# Swipe for Letterboxd v6.3.0-beta.4
 
 > Formerly **Vypode for Letterboxd** — renamed to **Swipe for Letterboxd** in v6.1.0. Internal storage keys and APIs are unchanged, so existing local data carries over.
 
 
 A Chrome extension that adds a swipe-style interface and a local profile database for Letterboxd. It helps you move through films quickly, hide titles you have already handled, and search your own watched history by title, rating, liked status, and review text where Letterboxd exposes it.
+
+## What's New in v6.3.0-beta.4
+
+- **Press K to start a trailer** — on a Letterboxd `/trailer/` page, **K** now
+  starts the unopened YouTube player without requiring a trackpad click.
+- **Reliable keyboard controls** — after **K** activates the trailer, **K** or
+  **Space** sends play/pause directly, without requiring iframe focus or a click.
+- **Discoverable and isolated** — a small *Press K to play trailer* hint appears
+  on trailer pages. The shortcut ignores typing, modified keys, repeats, other
+  Letterboxd pages, and unrelated or untrusted iframe URLs.
 
 ## What's New in v6.3.0-beta.3
 
@@ -90,18 +100,20 @@ There is no third-party cloud backup in this release. Your film registry is stor
 
 ## Installation
 
-### Testing v6.3.0-beta.3
+### Testing v6.3.0-beta.4
 
-1. Download and unzip `swipe-for-letterboxd-v6.3.0-beta.3.zip` from the beta release.
+1. Download and unzip `swipe-for-letterboxd-v6.3.0-beta.4.zip` from the beta release.
 2. Open `chrome://extensions/`, enable **Developer mode**, and choose **Load unpacked**.
 3. Select the unzipped folder containing `manifest.json`.
 4. Open a Letterboxd listing and launch **Swipe Deck**. Press **T** or use the
    *Trailer* control; the trailer opens in a new tab without advancing the card.
-5. Open **Review** and test Dictate. The button changes to Recording only after
+5. On the trailer page, press **K** once. The YouTube trailer starts; use **K**
+   or **Space** afterward to pause and resume it.
+6. Open **Review** and test Dictate. The button changes to Recording only after
    the browser starts recognition; Stop and Submit preserve the final words.
-6. In Brave, **System dictation** focuses the review box and gives the macOS
+7. In Brave, **System dictation** focuses the review box and gives the macOS
    shortcut. Browser speech recognition can also be checked in Chrome.
-7. To test pagination, enable **Settings → Deck Behaviour → Open next Letterboxd
+8. To test pagination, enable **Settings → Deck Behaviour → Open next Letterboxd
    page automatically** and finish the last card on a page.
 
 ### From Chrome Web Store
@@ -152,6 +164,7 @@ On pages like `letterboxd.com/films/popular/`, click **Vypode Deck**. The deck s
 | Add to watchlist | Right zone + click | Right arrow |
 | Skip | Bottom zone + click | Down arrow |
 | Open trailer | Trailer control | T |
+| Start / pause trailer on its trailer page | YouTube controls | K, then K / Space |
 | Review | Review button | R |
 | Settings | Gear icon | S |
 | Close | Click outside card or X | Escape |
@@ -263,6 +276,13 @@ operating-system settings. Brave uses system-dictation guidance because its
 browser speech-recognition service is not dependable for this extension.
 On macOS, focus the review box and use your configured Dictation shortcut,
 commonly Fn/Globe twice.
+
+**K does not start the trailer?**
+
+Make sure the address ends in `/trailer/` and wait for the YouTube thumbnail to
+appear. Press **K** again if the browser took longer than usual to create the
+player. Browser media settings can still block playback; once the shortcut is
+active, a further **K** or **Space** sends play/pause to the embedded player.
 
 ## Migration from v4.0
 

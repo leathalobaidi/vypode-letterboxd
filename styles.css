@@ -1,4 +1,4 @@
-/* SWIPE FOR LETTERBOXD - Styles v6.3.0-beta.3 */
+/* SWIPE FOR LETTERBOXD - Styles v6.3.0-beta.4 */
 
 /* ── Toggle Button ─────────────────────────────────────────────────── */
 
@@ -507,6 +507,24 @@
   border-color: rgba(255, 255, 255, 0.12);
   background: transparent;
   cursor: not-allowed;
+}
+
+.vypode-trailer-key-hint {
+  position: fixed;
+  left: 50%;
+  bottom: 24px;
+  transform: translateX(-50%);
+  z-index: 1000003;
+  padding: 9px 15px;
+  border: 1px solid rgba(247, 147, 30, 0.7);
+  border-radius: 18px;
+  background: rgba(8, 8, 12, 0.9);
+  color: #f7a13b;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.45);
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  pointer-events: none;
 }
 
 /* ── Progress Bar ──────────────────────────────────────────────────── */
