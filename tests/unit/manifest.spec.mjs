@@ -12,7 +12,7 @@ test('manifest is local-first and has only required Chrome permissions', () => {
   assert.equal(manifest.manifest_version, 3);
   assert.match(manifest.version, /^\d+\.\d+\.\d+$/);
   assert.equal(manifest.version, pkg.version, 'manifest.json and package.json versions must match');
-  assert.equal(manifest.version_name, '6.3.0-beta.2');
+  assert.equal(manifest.version_name, '6.3.0-beta.3');
   assert.deepEqual(manifest.permissions, ['storage', 'unlimitedStorage']);
   assert.equal('oauth2' in manifest, false);
   assert.equal('web_accessible_resources' in manifest, false);

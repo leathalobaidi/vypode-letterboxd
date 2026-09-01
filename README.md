@@ -1,9 +1,29 @@
-# Swipe for Letterboxd v6.3.0-beta.2
+# Swipe for Letterboxd v6.3.0-beta.3
 
 > Formerly **Vypode for Letterboxd** — renamed to **Swipe for Letterboxd** in v6.1.0. Internal storage keys and APIs are unchanged, so existing local data carries over.
 
 
 A Chrome extension that adds a swipe-style interface and a local profile database for Letterboxd. It helps you move through films quickly, hide titles you have already handled, and search your own watched history by title, rating, liked status, and review text where Letterboxd exposes it.
+
+## What's New in v6.3.0-beta.3
+
+- **Trailer shortcut** — press **T** on a Swipe deck card, or select the visible
+  *Trailer* control, to open that film's Letterboxd trailer page in a new tab.
+  The current card and deck position stay unchanged.
+- **Trailer availability** — Swipe checks the film details it already loads and
+  disables the control when Letterboxd does not list a trailer. Validated film
+  slugs are used directly, including titles whose Letterboxd slug contains a
+  year or differs from the displayed title.
+- **Reliable dictation state** — the review panel now says *Requesting* until
+  the browser confirms recording has started, reports microphone, service,
+  network, language, and no-speech failures, and never loops endlessly after
+  an error.
+- **Safer final words** — Stop finishes recognition gracefully, Cancel aborts
+  it, and Submit waits briefly for the final transcript. If the speech engine
+  times out, the review stays open for you to check before submitting again.
+- **Brave and unsupported-browser fallback** — when browser speech recognition
+  is unavailable or never starts, Swipe focuses the review box and explains how
+  to use system dictation instead of showing a false Recording state.
 
 ## What's New in v6.3.0-beta.2
 
@@ -70,13 +90,19 @@ There is no third-party cloud backup in this release. Your film registry is stor
 
 ## Installation
 
-### Testing v6.3.0-beta.2
+### Testing v6.3.0-beta.3
 
-1. Download and unzip `swipe-for-letterboxd-v6.3.0-beta.2.zip` from the beta release.
+1. Download and unzip `swipe-for-letterboxd-v6.3.0-beta.3.zip` from the beta release.
 2. Open `chrome://extensions/`, enable **Developer mode**, and choose **Load unpacked**.
 3. Select the unzipped folder containing `manifest.json`.
-4. Open a Letterboxd listing, launch **Swipe Deck**, then open **Settings → Deck Behaviour**.
-5. Enable **Open next Letterboxd page automatically**. On the final card, Swipe follows the real Next link and reopens the deck on the new page.
+4. Open a Letterboxd listing and launch **Swipe Deck**. Press **T** or use the
+   *Trailer* control; the trailer opens in a new tab without advancing the card.
+5. Open **Review** and test Dictate. The button changes to Recording only after
+   the browser starts recognition; Stop and Submit preserve the final words.
+6. In Brave, **System dictation** focuses the review box and gives the macOS
+   shortcut. Browser speech recognition can also be checked in Chrome.
+7. To test pagination, enable **Settings → Deck Behaviour → Open next Letterboxd
+   page automatically** and finish the last card on a page.
 
 ### From Chrome Web Store
 
@@ -125,6 +151,7 @@ On pages like `letterboxd.com/films/popular/`, click **Vypode Deck**. The deck s
 | Like | Top zone + click | Up arrow |
 | Add to watchlist | Right zone + click | Right arrow |
 | Skip | Bottom zone + click | Down arrow |
+| Open trailer | Trailer control | T |
 | Review | Review button | R |
 | Settings | Gear icon | S |
 | Close | Click outside card or X | Escape |
@@ -164,9 +191,10 @@ Large histories can take a few minutes because Vypode paginates through Letterbo
 
 **Swipe for Letterboxd is local-first and collects no data for the developer.** There is no server, no analytics, and no developer-side account.
 
-- **Where your data lives.** Your film registry — titles, years, ratings, liked/watched/watchlist status, and review text where Letterboxd exposes it — is stored only in your own browser via `chrome.storage` on your device. Filter preferences use Chrome's built-in sync storage. Nothing is transmitted to the developer or any third party.
+- **Where your data lives.** Your film registry — titles, years, ratings, liked/watched/watchlist status, and review text where Letterboxd exposes it — is stored only in your own browser via `chrome.storage` on your device. Filter preferences use Chrome's built-in sync storage. Nothing is transmitted to the developer.
 - **What it reads.** To build that local database it reads your own Letterboxd profile pages, which requires you to be signed in. It reads only what it needs to record your watch history on your device.
 - **What it changes.** When you mark watched/liked/watchlist or submit a review, it acts on your real Letterboxd account using your active session — the same as if you clicked those controls yourself.
+- **Dictation and trailers.** Dictation uses the speech-recognition service supplied by your browser or operating system; depending on the browser, audio may be processed by the browser vendor's service. Swipe never receives or stores the audio. Opening a trailer visits Letterboxd's trailer page, which may load a YouTube player under Letterboxd's and YouTube's privacy policies.
 
 This section serves as the extension's privacy policy.
 
@@ -227,6 +255,14 @@ Large accounts can take a few minutes. Keep the Letterboxd tab open until the sy
 **Review submit failed?**
 
 Make sure you are logged into Letterboxd. Vypode keeps the review panel open so you can retry.
+
+**Dictate says it is unavailable or never starts?**
+
+Allow microphone access for `letterboxd.com` and for your browser in the
+operating-system settings. Brave uses system-dictation guidance because its
+browser speech-recognition service is not dependable for this extension.
+On macOS, focus the review box and use your configured Dictation shortcut,
+commonly Fn/Globe twice.
 
 ## Migration from v4.0
 

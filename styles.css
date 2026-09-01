@@ -1,4 +1,4 @@
-/* SWIPE FOR LETTERBOXD - Styles v6.3.0-beta.2 */
+/* SWIPE FOR LETTERBOXD - Styles v6.3.0-beta.3 */
 
 /* ── Toggle Button ─────────────────────────────────────────────────── */
 
@@ -467,18 +467,47 @@
   text-align: center;
 }
 
-/* ── Open Film Link ────────────────────────────────────────────────── */
+/* ── Film and Trailer Links ────────────────────────────────────────── */
 
-.vypode-open-link {
-  display: inline-block;
+.vypode-footer-links {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
   margin-top: 10px;
+}
+
+.vypode-open-link,
+.vypode-trailer-btn {
+  display: inline-block;
   color: rgba(255, 255, 255, 0.6);
   font-size: 12px;
   text-decoration: none;
-  transition: color 0.2s ease;
+  transition: color 0.2s ease, border-color 0.2s ease, background 0.2s ease;
 }
 
-.vypode-open-link:hover { color: #f7931e; }
+.vypode-open-link:hover,
+.vypode-trailer-btn:hover { color: #f7931e; }
+
+.vypode-trailer-btn {
+  padding: 5px 11px;
+  border: 1px solid rgba(247, 147, 30, 0.55);
+  border-radius: 14px;
+  color: #f7a13b;
+  cursor: pointer;
+}
+
+.vypode-trailer-btn:hover {
+  background: rgba(247, 147, 30, 0.12);
+  border-color: #f7931e;
+}
+
+.vypode-trailer-btn.unavailable {
+  color: rgba(255, 255, 255, 0.3);
+  border-color: rgba(255, 255, 255, 0.12);
+  background: transparent;
+  cursor: not-allowed;
+}
 
 /* ── Progress Bar ──────────────────────────────────────────────────── */
 
@@ -643,6 +672,7 @@
 }
 
 .vypode-mic-btn:hover { transform: scale(1.05); }
+.vypode-mic-btn:disabled { opacity: 0.6; cursor: wait; transform: none; }
 
 .vypode-mic-btn.listening {
   background: linear-gradient(135deg, #ff4444, #ff6666);
@@ -655,6 +685,18 @@
 }
 
 .vypode-mic-hint { color: rgba(255, 255, 255, 0.4); font-size: 12px; }
+.vypode-speech-status {
+  color: rgba(255, 255, 255, 0.55);
+  font-size: 12px;
+  line-height: 1.4;
+  min-height: 17px;
+  margin-bottom: 5px;
+}
+.vypode-speech-status.requesting { color: #f7a13b; }
+.vypode-speech-status.listening,
+.vypode-speech-status.success { color: #75dc96; }
+.vypode-speech-status.warning { color: #ffc66d; }
+.vypode-speech-status.error { color: #ff7777; }
 .vypode-interim { color: rgba(255, 255, 255, 0.5); font-size: 14px; font-style: italic; min-height: 20px; margin-bottom: 8px; }
 
 #vypodeReviewText {
@@ -1177,4 +1219,8 @@
   .vypode-db-detail-body {
     grid-template-columns: 1fr;
   }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .vypode-mic-btn.listening { animation: none; }
 }

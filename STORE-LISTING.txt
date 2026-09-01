@@ -1,4 +1,4 @@
-SWIPE FOR LETTERBOXD — CHROME WEB STORE LISTING (v6.3.0-beta.2)
+SWIPE FOR LETTERBOXD — CHROME WEB STORE LISTING (v6.3.0-beta.3)
 ================================================================
 (Formerly "Vypode for Letterboxd". Internal storage keys/APIs unchanged.)
 Upload: zip the repo root (the folder containing manifest.json) as a new package
@@ -30,12 +30,18 @@ WHAT IT DOES
 • Filter, sort, search — Search your history and filter by watched / liked /
   watchlist / rated / reviewed / genre / watched-date, then sort by rating, year,
   watched date, or title. Open any film for a detail view.
-• Quick review — Write and submit a star rating + review from the deck.
+• Trailers — Press T or use the Trailer control to open the current film's
+  Letterboxd trailer page without losing your place in the deck.
+• Quick review — Write and submit a star rating + review from the deck, with
+  browser dictation where the browser supplies a working recognition service.
 
 PRIVACY & WHERE YOUR DATA LIVES
 • Your film registry is stored locally in your browser (chrome.storage). There is no
-  account with us, no server, and nothing is sent to any third party.
+  account with us or developer-operated server, and nothing is sent to us.
 • Preferences sync via Chrome's built-in sync storage only.
+• Dictation uses the browser or operating system speech service; the extension does
+  not receive or store microphone audio. Trailer links may load Letterboxd and its
+  YouTube player only after the user opens one.
 
 CATEGORY:
 Productivity   (alternative: Entertainment)
@@ -78,6 +84,8 @@ IMPORTANT DISCLOSURE (also stated in the README)
 • Marking watched/liked/watchlist and submitting reviews WRITE to your real Letterboxd
   account using your active session. Review submission posts to a Letterboxd endpoint
   that is not a public, documented API and may change without notice.
+• Dictation availability and audio processing depend on the browser's speech service.
+  Swipe does not add a microphone extension permission or receive the audio itself.
 • This is an unofficial, independent tool, not affiliated with or endorsed by
   Letterboxd. Use it in accordance with Letterboxd's Terms of Use.
 

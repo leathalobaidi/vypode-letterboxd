@@ -1,11 +1,11 @@
-// SWIPE FOR LETTERBOXD — Content Script v6.3.0-beta.2
-// Background actions + auto-advance + auto-next-page + Voice Review + Star Rating
+// SWIPE FOR LETTERBOXD — Content Script v6.3.0-beta.3
+// Background actions + auto-advance + auto-next-page + Trailer shortcut + Voice Review + Star Rating
 // v6.0.0: FilmState registry, fresh poster filtering, durable skip,
 //         account awareness, collection sync, settings panel, local profile database
 // v6.0.1: corrupted-storage load safety, 429/503 sync backoff, throttled review fan-out
 // v6.0.2: same-instant reconcile/userAction tie-break, adaptive debounce for large libraries
 // v6.1.0: rebrand Vypode → "Swipe for Letterboxd" (user-facing strings only)
-// v6.3.0-beta.2: optional automatic navigation to the next Letterboxd page
+// v6.3.0-beta.3: trailer shortcut and resilient review dictation
 (function() {
   'use strict';
   if (window.vypodeInjected) return;
@@ -35,7 +35,14 @@
   let settingsPanelVisible = false;
   let currentRating = 0;
   let recognition = null;
-  let isListening = false;
+  let speechState = 'idle';
+  let speechSessionId = 0;
+  let speechStartTimer = null;
+  let speechStopTimer = null;
+  let speechStopPromise = null;
+  let resolveSpeechStop = null;
+  const SPEECH_START_TIMEOUT_MS = 30000;
+  const SPEECH_STOP_TIMEOUT_MS = 4000;
 
   // Account state
   let letterboxdUsername = null;
@@ -67,6 +74,12 @@
   function absoluteLetterboxdUrl(path) {
     if (!path) return '';
     return path.startsWith('http') ? path : 'https://letterboxd.com' + path;
+  }
+
+  function getTrailerPageUrl(film) {
+    const slug = String(film?.slug || '');
+    if (!/^[a-z0-9][a-z0-9-]*$/i.test(slug)) return '';
+    return `https://letterboxd.com/film/${slug}/trailer/`;
   }
 
   function readCsrfToken(doc) {
@@ -402,6 +415,9 @@
       film.director = doc.querySelector('.contributor a')?.textContent?.trim() || '';
       const genreEls = doc.querySelectorAll('.text-sluglist a[href*="/films/genre/"]');
       film.genres = Array.from(genreEls).slice(0, 3).map(el => el.textContent.trim());
+      film.hasTrailer = Boolean(doc.querySelector(
+        '.js-watch-panel-trailer a[href], a.js-video-zoom[href], a[href*="/trailer/"]'
+      ));
       persistFilmRecord(film, 'domSync');
 
       // Update the card if it's still the one being displayed
@@ -428,6 +444,7 @@
     if (genresEl && film.genres.length > 0) {
       genresEl.innerHTML = film.genres.map(g => '<span class="vypode-genre-tag">' + escapeHtml(g) + '</span>').join('');
     }
+    updateTrailerControl(film);
   }
 
   function findNextPageLink(root) {
@@ -1145,6 +1162,9 @@
     if (existing) existing.remove();
     const toast = document.createElement('div');
     toast.className = 'vypode-toast vypode-toast-' + type;
+    toast.setAttribute('role', type === 'error' ? 'alert' : 'status');
+    toast.setAttribute('aria-live', type === 'error' ? 'assertive' : 'polite');
+    toast.setAttribute('aria-atomic', 'true');
     toast.textContent = message;
     document.body.appendChild(toast);
     setTimeout(() => toast.classList.add('show'), 10);
@@ -1490,89 +1510,318 @@
 
   // ==================== REVIEW PANEL ====================
 
-  function initSpeechRecognition() {
-    if (!('webkitSpeechRecognition' in window) && !('SpeechRecognition' in window)) return null;
-    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-    recognition = new SpeechRecognition();
-    recognition.continuous = false;
-    recognition.interimResults = true;
-    recognition.lang = navigator.language || 'en';
-
-    recognition.onresult = (event) => {
-      const textarea = document.getElementById('vypodeReviewText');
-      if (!textarea) return;
-      let finalTranscript = '';
-      let interimTranscript = '';
-      for (let i = event.resultIndex; i < event.results.length; i++) {
-        const transcript = event.results[i][0].transcript;
-        if (event.results[i].isFinal) finalTranscript += transcript + ' ';
-        else interimTranscript = transcript;
-      }
-      if (finalTranscript) textarea.value += finalTranscript;
-      const interim = document.getElementById('vypodeInterim');
-      if (interim) interim.textContent = interimTranscript;
-    };
-
-    recognition.onerror = (event) => {
-      if (event.error === 'not-allowed') {
-        showFeedback('Microphone access denied - check browser permissions', 'error');
-        isListening = false;
-        updateMicButton();
-      }
-    };
-
-    recognition.onend = () => {
-      const interim = document.getElementById('vypodeInterim');
-      if (interim) interim.textContent = '';
-      if (isListening) {
-        setTimeout(() => {
-          if (isListening && recognition) {
-            try { recognition.start(); } catch(e) {}
-          }
-        }, 100);
-      }
-    };
-
-    return recognition;
+  function getSpeechRecognitionCtor() {
+    return window.SpeechRecognition || window.webkitSpeechRecognition || null;
   }
 
-  function startListening() {
-    if (recognition) { try { recognition.stop(); } catch(e) {} }
-    recognition = initSpeechRecognition();
-    if (!recognition) { showFeedback('Speech recognition not supported in this browser', 'error'); return; }
-    isListening = true;
-    updateMicButton();
-    try {
-      recognition.start();
-      showFeedback('Listening... speak now', 'like');
-    } catch (e) {
-      isListening = false;
-      updateMicButton();
-      showFeedback('Could not start microphone', 'error');
-    }
+  function isBraveBrowser() {
+    return Boolean(window.navigator?.brave && typeof window.navigator.brave.isBrave === 'function');
   }
 
-  function stopListening() {
-    isListening = false;
-    if (recognition) {
-      try { recognition.stop(); } catch(e) {}
-      try { recognition.abort(); } catch(e) {}
-    }
-    updateMicButton();
-    const interim = document.getElementById('vypodeInterim');
-    if (interim) interim.textContent = '';
+  function systemDictationHelp(prefix) {
+    const platform = `${window.navigator?.platform || ''} ${window.navigator?.userAgent || ''}`;
+    const shortcut = /Mac/i.test(platform)
+      ? 'Focus the review box and press Fn/Globe twice to use macOS Dictation.'
+      : 'Focus the review box and start your system dictation shortcut.';
+    return `${prefix ? prefix + ' ' : ''}${shortcut}`;
   }
 
-  function toggleListening() {
-    if (isListening) stopListening();
-    else startListening();
+  function setSpeechStatus(message, tone) {
+    const status = document.getElementById('vypodeSpeechStatus');
+    if (!status) return;
+    status.textContent = message || '';
+    status.className = `vypode-speech-status${tone ? ` ${tone}` : ''}`;
+  }
+
+  function clearSpeechTimers() {
+    if (speechStartTimer) clearTimeout(speechStartTimer);
+    if (speechStopTimer) clearTimeout(speechStopTimer);
+    speechStartTimer = null;
+    speechStopTimer = null;
+  }
+
+  function settleSpeechStop(result) {
+    const resolve = resolveSpeechStop;
+    resolveSpeechStop = null;
+    speechStopPromise = null;
+    if (resolve) resolve(result || { status: 'complete' });
   }
 
   function updateMicButton() {
     const micBtn = document.getElementById('vypodeMicBtn');
-    if (micBtn) {
-      micBtn.classList.toggle('listening', isListening);
-      micBtn.textContent = isListening ? 'Recording...' : 'Dictate';
+    if (!micBtn) return;
+    const labels = {
+      idle: 'Dictate',
+      starting: 'Cancel dictation',
+      listening: 'Recording...',
+      stopping: 'Finishing...',
+      unavailable: 'System dictation',
+      error: 'Dictate'
+    };
+    const active = speechState === 'starting' || speechState === 'listening' || speechState === 'stopping';
+    micBtn.textContent = labels[speechState] || 'Dictate';
+    micBtn.dataset.state = speechState;
+    micBtn.classList.toggle('listening', speechState === 'listening');
+    micBtn.disabled = speechState === 'stopping';
+    micBtn.setAttribute('aria-pressed', active ? 'true' : 'false');
+    micBtn.setAttribute('aria-busy', speechState === 'stopping' ? 'true' : 'false');
+  }
+
+  function setDictationState(nextState, message, tone) {
+    speechState = nextState;
+    updateMicButton();
+    if (message !== undefined) setSpeechStatus(message, tone);
+  }
+
+  function clearInterimTranscript() {
+    const interim = document.getElementById('vypodeInterim');
+    if (interim) interim.textContent = '';
+  }
+
+  function finishDictationSession(instance, sessionId, nextState, message, tone, stopResult) {
+    if (recognition !== instance || speechSessionId !== sessionId) return;
+    clearSpeechTimers();
+    recognition = null;
+    clearInterimTranscript();
+    settleSpeechStop(stopResult);
+    setDictationState(nextState || 'idle', message, tone);
+  }
+
+  function speechErrorMessage(code) {
+    const braveHint = isBraveBrowser()
+      ? ' Brave browser speech recognition may be unavailable; use system dictation or try Chrome.'
+      : '';
+    const messages = {
+      'not-allowed': 'Microphone access is blocked. Allow it for letterboxd.com and in your system settings.',
+      'service-not-allowed': 'The browser speech service is blocked or unavailable.' + braveHint,
+      'audio-capture': 'No working microphone was found. Check your browser and system microphone settings.',
+      'network': 'The speech service could not connect. Check your connection and try again.' + braveHint,
+      'no-speech': 'No speech was heard. Press Dictate and try again.',
+      'language-not-supported': 'Your current language is not supported for browser dictation.',
+      'bad-grammar': 'The browser could not configure speech recognition.',
+      'phrases-not-supported': 'The browser could not configure speech recognition.',
+      'aborted': 'Dictation stopped unexpectedly. Press Dictate to try again.'
+    };
+    return messages[code] || `Dictation failed${code ? ` (${code})` : ''}. Press Dictate to try again.`;
+  }
+
+  function appendFinalTranscript(textarea, transcript) {
+    const clean = String(transcript || '').replace(/\s+/g, ' ').trim();
+    if (!textarea || !clean) return;
+    const existing = textarea.value || '';
+    const separator = existing && !/\s$/.test(existing) && !/^[,.;!?]/.test(clean) ? ' ' : '';
+    textarea.value = existing + separator + clean;
+    textarea.dispatchEvent(new Event('input', { bubbles: true }));
+  }
+
+  function initSpeechRecognition(sessionId) {
+    const SpeechRecognition = getSpeechRecognitionCtor();
+    if (!SpeechRecognition) return null;
+    const instance = new SpeechRecognition();
+    const committedResultIndexes = new Set();
+    instance.continuous = true;
+    instance.interimResults = true;
+    instance.maxAlternatives = 1;
+    instance.lang = window.navigator?.language || 'en-GB';
+
+    const isCurrent = () => recognition === instance && speechSessionId === sessionId;
+    const markStarted = () => {
+      if (!isCurrent() || speechState === 'stopping') return;
+      if (speechStartTimer) clearTimeout(speechStartTimer);
+      speechStartTimer = null;
+      setDictationState('listening', 'Listening. Press Recording to stop and keep your final words.', 'listening');
+    };
+
+    instance.onstart = markStarted;
+    instance.onaudiostart = markStarted;
+    instance.onresult = (event) => {
+      if (!isCurrent()) return;
+      markStarted();
+      const textarea = document.getElementById('vypodeReviewText');
+      if (!textarea) return;
+      const finalParts = [];
+      const interimParts = [];
+      for (let i = event.resultIndex; i < event.results.length; i++) {
+        const transcript = event.results[i]?.[0]?.transcript || '';
+        if (event.results[i].isFinal) {
+          if (!committedResultIndexes.has(i)) {
+            committedResultIndexes.add(i);
+            finalParts.push(transcript);
+          }
+        } else {
+          interimParts.push(transcript);
+        }
+      }
+      appendFinalTranscript(textarea, finalParts.join(' '));
+      const interim = document.getElementById('vypodeInterim');
+      if (interim) interim.textContent = interimParts.join(' ').trim();
+    };
+    instance.onnomatch = () => {
+      if (isCurrent()) setSpeechStatus('That was not clear enough to transcribe. Keep speaking or try again.', 'warning');
+    };
+    instance.onerror = (event) => {
+      if (!isCurrent()) return;
+      const code = event?.error || 'unknown';
+      if (code === 'aborted' && speechState === 'stopping') {
+        finishDictationSession(
+          instance,
+          sessionId,
+          'idle',
+          'Dictation stopped before final words were confirmed. Check the review text before submitting.',
+          'warning',
+          { status: 'error' }
+        );
+        return;
+      }
+      if (code === 'service-not-allowed') {
+        finishDictationSession(
+          instance,
+          sessionId,
+          'unavailable',
+          systemDictationHelp('The browser speech service is unavailable.'),
+          'warning',
+          { status: 'error' }
+        );
+        document.getElementById('vypodeReviewText')?.focus();
+        return;
+      }
+      finishDictationSession(
+        instance,
+        sessionId,
+        code === 'no-speech' ? 'idle' : 'error',
+        speechErrorMessage(code),
+        code === 'no-speech' ? 'warning' : 'error',
+        { status: 'error' }
+      );
+    };
+    instance.onend = () => {
+      if (!isCurrent()) return;
+      const stoppedByUser = speechState === 'stopping';
+      finishDictationSession(
+        instance,
+        sessionId,
+        'idle',
+        stoppedByUser ? 'Dictation added to your review.' : 'Dictation finished. Press Dictate to continue.',
+        'success',
+        { status: 'complete' }
+      );
+    };
+
+    return instance;
+  }
+
+  function focusSystemDictation(prefix) {
+    const textarea = document.getElementById('vypodeReviewText');
+    textarea?.focus();
+    setDictationState('unavailable', systemDictationHelp(prefix || 'Browser dictation is unavailable.'), 'warning');
+  }
+
+  function startListening() {
+    if (speechState === 'starting' || speechState === 'listening' || speechState === 'stopping') return;
+    if (isBraveBrowser()) {
+      focusSystemDictation('Brave browser dictation is unavailable.');
+      return;
+    }
+    if (!getSpeechRecognitionCtor()) {
+      focusSystemDictation();
+      return;
+    }
+
+    const sessionId = ++speechSessionId;
+    let instance = null;
+    try {
+      instance = initSpeechRecognition(sessionId);
+    } catch {
+      focusSystemDictation('This browser could not create a speech-recognition session.');
+      return;
+    }
+    recognition = instance;
+    if (!instance) {
+      focusSystemDictation();
+      return;
+    }
+
+    setDictationState('starting', 'Requesting microphone access...', 'requesting');
+    speechStartTimer = setTimeout(() => {
+      if (recognition !== instance || speechSessionId !== sessionId || speechState !== 'starting') return;
+      speechSessionId++;
+      recognition = null;
+      clearSpeechTimers();
+      try { instance.abort(); } catch {}
+      settleSpeechStop({ status: 'error' });
+      focusSystemDictation('Browser dictation did not start.');
+    }, SPEECH_START_TIMEOUT_MS);
+
+    try {
+      instance.start();
+    } catch {
+      finishDictationSession(instance, sessionId, 'error', 'Could not start browser dictation. Press Dictate to try again.', 'error');
+    }
+  }
+
+  function stopListening(options) {
+    const cancel = Boolean(options?.cancel);
+    const instance = recognition;
+
+    if (cancel) {
+      speechSessionId++;
+      recognition = null;
+      clearSpeechTimers();
+      clearInterimTranscript();
+      settleSpeechStop({ status: 'cancelled' });
+      if (instance) {
+        try { instance.abort(); } catch {}
+      }
+      setDictationState('idle', '');
+      return Promise.resolve({ status: 'cancelled' });
+    }
+
+    if (!instance) return Promise.resolve({ status: 'idle' });
+    if (speechState === 'stopping' && speechStopPromise) return speechStopPromise;
+    const sessionId = speechSessionId;
+    const stopPromise = new Promise(resolve => { resolveSpeechStop = resolve; });
+    speechStopPromise = stopPromise;
+    if (speechStartTimer) clearTimeout(speechStartTimer);
+    speechStartTimer = null;
+    setDictationState('stopping', 'Finishing the last dictated words...', 'requesting');
+
+    speechStopTimer = setTimeout(() => {
+      if (recognition !== instance || speechSessionId !== sessionId) return;
+      speechSessionId++;
+      recognition = null;
+      clearSpeechTimers();
+      clearInterimTranscript();
+      try { instance.abort(); } catch {}
+      settleSpeechStop({ status: 'timeout' });
+      setDictationState('idle', 'Final dictated words could not be confirmed. Review the text, then press Submit again.', 'error');
+    }, SPEECH_STOP_TIMEOUT_MS);
+
+    try {
+      instance.stop();
+    } catch {
+      speechSessionId++;
+      recognition = null;
+      clearSpeechTimers();
+      try { instance.abort(); } catch {}
+      settleSpeechStop({ status: 'error' });
+      setDictationState('error', 'Could not finish dictation cleanly. Check the review text and try again.', 'error');
+    }
+    return stopPromise;
+  }
+
+  function toggleListening() {
+    if (speechState === 'starting') {
+      stopListening({ cancel: true });
+    } else if (speechState === 'listening') {
+      stopListening();
+    } else if (speechState === 'stopping') {
+      return;
+    } else if (isBraveBrowser()) {
+      focusSystemDictation('Brave browser dictation is unavailable.');
+    } else if (!getSpeechRecognitionCtor() || speechState === 'unavailable') {
+      focusSystemDictation();
+    } else {
+      startListening();
     }
   }
 
@@ -1625,14 +1874,15 @@
           <span class="vypode-rating-text" id="vypodeRatingText">No rating</span>
         </div>
         <div class="vypode-review-section">
-          <label>Your review:</label>
+          <label for="vypodeReviewText">Your review:</label>
           <div class="vypode-review-notice">Submitting creates a Letterboxd diary entry for today using this rating and review text.</div>
           ${inactiveReviewNotice}
           <div class="vypode-dictate-row">
-            <button class="vypode-mic-btn" id="vypodeMicBtn">Dictate</button>
+            <button type="button" class="vypode-mic-btn" id="vypodeMicBtn" aria-pressed="false" aria-describedby="vypodeSpeechStatus" data-state="idle">Dictate</button>
             <span class="vypode-mic-hint">or just type below</span>
           </div>
-          <div class="vypode-interim" id="vypodeInterim"></div>
+          <div class="vypode-speech-status" id="vypodeSpeechStatus" role="status" aria-live="polite" aria-atomic="true"></div>
+          <div class="vypode-interim" id="vypodeInterim" aria-hidden="true"></div>
           <textarea id="vypodeReviewText" placeholder="Write or dictate your review here..."></textarea>
         </div>
         <div class="vypode-review-actions">
@@ -1651,10 +1901,43 @@
     document.getElementById('vypodeReviewClose').addEventListener('click', hideReviewPanel);
     document.getElementById('vypodeReviewCancel').addEventListener('click', hideReviewPanel);
     document.getElementById('vypodeMicBtn').addEventListener('click', toggleListening);
-    document.getElementById('vypodeReviewSubmit').addEventListener('click', () => {
-      const reviewText = document.getElementById('vypodeReviewText').value.trim();
-      const filmUrl = isListingPage ? filmDeck[currentDeckIndex].url : window.location.href;
-      submitReview(filmUrl, reviewText, currentRating);
+    if (isBraveBrowser()) {
+      setDictationState('unavailable', systemDictationHelp('Brave browser dictation is unavailable.'), 'warning');
+    } else if (getSpeechRecognitionCtor()) {
+      setDictationState('idle', 'Press Dictate, then speak after the browser confirms it is recording.');
+    } else {
+      setDictationState('unavailable', systemDictationHelp('Browser dictation is unavailable.'), 'warning');
+    }
+    document.getElementById('vypodeReviewSubmit').addEventListener('click', async (event) => {
+      const submitBtn = event.currentTarget;
+      if (submitBtn.dataset.submitting === 'true') return;
+      submitBtn.dataset.submitting = 'true';
+      submitBtn.disabled = true;
+      submitBtn.textContent = speechState === 'listening' || speechState === 'starting'
+        ? 'Finishing dictation...'
+        : 'Submitting...';
+      const speechStopResult = await stopListening();
+      if (!reviewPanelVisible || !document.body.contains(panel)) return;
+      if (speechStopResult?.status === 'timeout' || speechStopResult?.status === 'error') {
+        submitBtn.dataset.submitting = 'false';
+        submitBtn.disabled = !isLetterboxdSessionActive;
+        submitBtn.textContent = isLetterboxdSessionActive ? 'Submit Review' : 'Log in to submit';
+        setSpeechStatus(
+          'Dictation did not finish cleanly. Review the text, then press Submit again.',
+          'error'
+        );
+        document.getElementById('vypodeReviewText')?.focus();
+        return;
+      }
+      const reviewText = document.getElementById('vypodeReviewText')?.value.trim() || '';
+      const filmUrl = film?.url || window.location.href;
+      submitBtn.textContent = 'Submitting...';
+      await submitReview(filmUrl, reviewText, currentRating);
+      if (reviewPanelVisible && document.body.contains(submitBtn)) {
+        submitBtn.dataset.submitting = 'false';
+        submitBtn.disabled = !isLetterboxdSessionActive;
+        submitBtn.textContent = isLetterboxdSessionActive ? 'Submit Review' : 'Log in to submit';
+      }
     });
     document.querySelectorAll('.vypode-star').forEach(btn => {
       btn.addEventListener('click', () => setRating(parseInt(btn.dataset.rating)));
@@ -1663,7 +1946,7 @@
 
   function hideReviewPanel() {
     reviewPanelVisible = false;
-    stopListening();
+    stopListening({ cancel: true });
     const panel = document.querySelector('.vypode-review-panel');
     if (panel) { panel.classList.remove('visible'); setTimeout(() => panel.remove(), 300); }
   }
@@ -1828,7 +2111,7 @@
           <input type="file" id="vypodeImportFile" accept=".json" style="display:none">
         </div>
 
-        <div class="vypode-settings-footer">Swipe for Letterboxd v6.3.0-beta.2</div>
+        <div class="vypode-settings-footer">Swipe for Letterboxd v6.3.0-beta.3</div>
       </div>
     `;
 
@@ -2168,6 +2451,47 @@
     enrichFilmData(filmDeck[1]);
   }
 
+  function updateTrailerControl(film) {
+    const link = document.getElementById('vypodeTrailerLink');
+    if (!link) return;
+    const trailerUrl = getTrailerPageUrl(film);
+    const unavailable = !trailerUrl || film?.hasTrailer === false;
+    link.classList.toggle('unavailable', unavailable);
+    link.setAttribute('aria-disabled', unavailable ? 'true' : 'false');
+    link.setAttribute('tabindex', '0');
+    if (unavailable) {
+      link.removeAttribute('href');
+      link.textContent = film?.hasTrailer === false ? 'No trailer listed' : 'Trailer unavailable';
+      link.title = film?.hasTrailer === false
+        ? 'Letterboxd does not list a trailer for this film'
+        : 'This film does not have a valid Letterboxd trailer address';
+    } else {
+      link.href = trailerUrl;
+      link.target = '_blank';
+      link.rel = 'noopener noreferrer';
+      link.textContent = 'Trailer \u2197';
+      link.title = film?.hasTrailer === true ? 'Open trailer (T)' : 'Open trailer on Letterboxd (T)';
+    }
+  }
+
+  function openCurrentTrailer() {
+    if (!isListingPage) return false;
+    const film = filmDeck[currentDeckIndex];
+    const trailerUrl = getTrailerPageUrl(film);
+    if (!trailerUrl || film?.hasTrailer === false) {
+      showFeedback(
+        film?.hasTrailer === false ? 'No trailer is listed for this film' : 'Trailer unavailable for this card',
+        'error'
+      );
+      return false;
+    }
+    const link = document.getElementById('vypodeTrailerLink');
+    if (!link) return false;
+    if (link.href !== trailerUrl) updateTrailerControl(film);
+    link.click();
+    return true;
+  }
+
   function createVypodeOverlay(film, states, isDeck) {
     const existing = document.querySelector('.vypode-overlay');
     if (existing) existing.remove();
@@ -2259,9 +2583,12 @@
           ${isDeck ? '<div class="vypode-hint"><span class="hint-dot blue"></span>\u2193 Skip</div>' : ''}
         </div>
         <div class="vypode-hints-sub">
-          ${isDeck ? 'Swipe to act \u2022 <b>R</b> to review \u2022 <b>S</b> settings' : '<b>R</b> to write review \u2022 <b>S</b> settings'}
+          ${isDeck ? 'Swipe to act \u2022 <b>T</b> trailer \u2022 <b>R</b> review \u2022 <b>S</b> settings' : '<b>R</b> to write review \u2022 <b>S</b> settings'}
         </div>
-        ${isDeck ? `<a href="${safeUrl}" target="_blank" class="vypode-open-link">Open film page \u2197</a>` : ''}
+        ${isDeck ? `<div class="vypode-footer-links">
+          <a href="${safeUrl}" target="_blank" rel="noopener noreferrer" class="vypode-open-link">Open film page \u2197</a>
+          <a id="vypodeTrailerLink" class="vypode-trailer-btn" target="_blank" rel="noopener noreferrer">Trailer \u2197</a>
+        </div>` : ''}
       </div>
       <div class="vypode-cursor-ring" id="vypodeCursor"><span class="vypode-cursor-label" id="vypodeCursorLabel"></span></div>
     `;
@@ -2278,6 +2605,7 @@
     isListingPage = isDeck;
 
     if (isDeck) {
+      updateTrailerControl(film);
       populateNextCard(filmDeck[currentDeckIndex + 1]);
       preloadNextPosters(currentDeckIndex + 1, 10);
     }
@@ -2329,6 +2657,7 @@
     if (prevBtn) prevBtn.disabled = currentDeckIndex === 0;
     const openLink = document.querySelector('.vypode-open-link');
     if (openLink) openLink.href = film.url;
+    updateTrailerControl(film);
   }
 
   // Flyoff current + scale-up next, then DOM-swap so the next becomes current.
@@ -2399,6 +2728,7 @@
     const nextBtn = document.getElementById('vypodeNext');
     const reviewBtn = document.getElementById('vypodeOpenReview');
     const settingsBtn = document.getElementById('vypodeOpenSettings');
+    const trailerLink = document.getElementById('vypodeTrailerLink');
 
     if (!card) return;
 
@@ -2406,6 +2736,20 @@
     overlay?.addEventListener('click', (e) => { if (e.target === overlay) hideVypode(); });
     reviewBtn?.addEventListener('click', showReviewPanel);
     settingsBtn?.addEventListener('click', showSettingsPanel);
+    trailerLink?.addEventListener('click', (event) => {
+      if (trailerLink.getAttribute('aria-disabled') !== 'true') return;
+      event.preventDefault();
+      showFeedback('No trailer is listed for this film', 'error');
+    });
+    trailerLink?.addEventListener('keydown', (event) => {
+      if (
+        trailerLink.getAttribute('aria-disabled') === 'true' &&
+        (event.key === 'Enter' || event.key === ' ')
+      ) {
+        event.preventDefault();
+        showFeedback('No trailer is listed for this film', 'error');
+      }
+    });
 
     if (isDeck) {
       prevBtn?.addEventListener('click', goToPrevCard);
@@ -2560,6 +2904,16 @@
     if (isProcessingAction) return;
     const card = document.getElementById('vypodeCard');
     if (!card) return;
+
+    if (
+      isListingPage &&
+      (e.key === 't' || e.key === 'T') &&
+      !e.metaKey && !e.ctrlKey && !e.altKey &&
+      !e.repeat && !isUserTyping()
+    ) {
+      if (openCurrentTrailer()) e.preventDefault();
+      return;
+    }
 
     if (e.key === 'r' || e.key === 'R') {
       e.preventDefault();
