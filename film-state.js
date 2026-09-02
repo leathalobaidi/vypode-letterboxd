@@ -644,8 +644,10 @@
       }
       if (remote?.stale) {
         if (accountId === targetAccount) {
+          const authoritativeAccountId = normalizeAccountId(remote.activeAccount) || targetAccount;
+          accountId = authoritativeAccountId;
           rootGeneration = remote.generation;
-          const authoritative = normalizeAccount(remote.account, targetAccount);
+          const authoritative = normalizeAccount(remote.account, authoritativeAccountId);
           registry = authoritative.slugs;
           meta = authoritative._meta;
           notifySubscribers('stale-write-rejected');
@@ -663,10 +665,12 @@
         return;
       }
       const { root } = normalizeRoot(result[STORAGE_KEY], targetAccount);
-      if (root._meta.generation > targetGeneration) {
+      const storedActiveAccount = normalizeAccountId(root._meta.activeAccount) || LEGACY_ACCOUNT;
+      if (root._meta.generation > targetGeneration || storedActiveAccount !== targetAccount) {
         if (accountId === targetAccount) {
+          accountId = storedActiveAccount;
           rootGeneration = root._meta.generation;
-          const authoritative = root.accounts[targetAccount] || freshAccount();
+          const authoritative = root.accounts[storedActiveAccount] || freshAccount();
           registry = authoritative.slugs;
           meta = authoritative._meta;
         }
@@ -803,16 +807,37 @@
         notifySubscribers('unsupported-state-version');
         return;
       }
-      const external = root.accounts[accountId] || freshAccount();
+      const authoritativeAccountId = normalizeAccountId(root._meta.activeAccount) || LEGACY_ACCOUNT;
+      let accountChanged = false;
       if (root._meta.generation > rootGeneration) {
+        if (saveTimer) {
+          clearTimeout(saveTimer);
+          saveTimer = null;
+        }
+        accountChanged = authoritativeAccountId !== accountId;
+        accountId = authoritativeAccountId;
         rootGeneration = root._meta.generation;
+        const external = root.accounts[accountId] || freshAccount();
         registry = external.slugs;
         meta = external._meta;
       } else if (root._meta.generation === rootGeneration) {
-        registry = mergeRegistriesForClear(external.slugs, registry);
-        meta = mergeAccountMeta(external._meta, meta);
+        if (authoritativeAccountId !== accountId) {
+          if (saveTimer) {
+            clearTimeout(saveTimer);
+            saveTimer = null;
+          }
+          accountChanged = true;
+          accountId = authoritativeAccountId;
+          const external = root.accounts[accountId] || freshAccount();
+          registry = external.slugs;
+          meta = external._meta;
+        } else {
+          const external = root.accounts[accountId] || freshAccount();
+          registry = mergeRegistriesForClear(external.slugs, registry);
+          meta = mergeAccountMeta(external._meta, meta);
+        }
       }
-      notifySubscribers('state-changed');
+      notifySubscribers(accountChanged ? 'account-changed' : 'state-changed');
     }
     const nextAccount = normalizeAccountId(changes[USER_KEY]?.newValue);
     if (nextAccount && nextAccount !== accountId) {
@@ -1638,6 +1663,7 @@
       if (remote?.error) throw new Error(remote.error);
       if (remote?.ok) {
         rootGeneration = remote.generation;
+        accountId = LEGACY_ACCOUNT;
         registry = Object.create(null);
         meta = freshMeta();
         lastClearResult = {
@@ -1652,8 +1678,10 @@
         return true;
       }
       if (remote?.stale) {
+        const authoritativeAccountId = normalizeAccountId(remote.activeAccount) || targetAccount;
+        accountId = authoritativeAccountId;
         rootGeneration = remote.generation;
-        const authoritative = normalizeAccount(remote.account, targetAccount);
+        const authoritative = normalizeAccount(remote.account, authoritativeAccountId);
         registry = authoritative.slugs;
         meta = authoritative._meta;
         notifySubscribers('stale-clear-rejected');
@@ -1666,6 +1694,7 @@
       );
       const { root } = normalizeRoot(result[STORAGE_KEY], accountId);
       rootGeneration = Math.max(rootGeneration, root._meta.generation) + 1;
+      accountId = LEGACY_ACCOUNT;
       registry = Object.create(null);
       meta = freshMeta();
       const cleared = freshRoot(LEGACY_ACCOUNT, rootGeneration);

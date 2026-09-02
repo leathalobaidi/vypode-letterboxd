@@ -258,7 +258,14 @@ async function applyStateCommand(action, data) {
   if (action === 'clearAll') {
     const requestedGeneration = Number(data?.generation);
     if (!Number.isSafeInteger(requestedGeneration) || requestedGeneration <= root._meta.generation) {
-      return { ok: false, stale: true, generation: root._meta.generation, account: root.accounts[accountId] || freshAccount() };
+      const activeAccount = normalizeAccountId(root._meta.activeAccount) || LEGACY_ACCOUNT;
+      return {
+        ok: false,
+        stale: true,
+        generation: root._meta.generation,
+        activeAccount,
+        account: root.accounts[activeAccount] || freshAccount()
+      };
     }
     const nextGeneration = Math.max(root._meta.generation + 1, requestedGeneration);
     const carriedActions = carryDispatchedOutbox(result[OUTBOX_KEY], nextGeneration);
@@ -341,7 +348,28 @@ async function applyStateCommand(action, data) {
   }
 
   if (Number(data?.generation) !== root._meta.generation) {
-    return { ok: false, stale: true, generation: root._meta.generation, account: root.accounts[accountId] || freshAccount() };
+    const activeAccount = normalizeAccountId(root._meta.activeAccount) || LEGACY_ACCOUNT;
+    return {
+      ok: false,
+      stale: true,
+      generation: root._meta.generation,
+      activeAccount,
+      account: root.accounts[activeAccount] || freshAccount()
+    };
+  }
+
+  const activeAccount = normalizeAccountId(root._meta.activeAccount) || LEGACY_ACCOUNT;
+  if (action !== 'activateAccount' && activeAccount !== accountId) {
+    // Only an explicit account activation may change ownership. A delayed
+    // merge or clear-skipped command from another tab must not reclaim state
+    // after Clear All or an account switch.
+    return {
+      ok: false,
+      stale: true,
+      generation: root._meta.generation,
+      activeAccount,
+      account: root.accounts[activeAccount] || freshAccount()
+    };
   }
 
   const account = root.accounts[accountId] || freshAccount();
@@ -1090,21 +1118,10 @@ async function applyReviewDraftCommand(action, data) {
   } else {
     throw new Error(`Unsupported review draft action: ${action}`);
   }
-  const updates = { [REVIEW_DRAFTS_KEY]: drafts };
-  // Clear All deliberately forgets the saved account by returning the root to
-  // $legacy. A new draft is an explicit account-bound action, so let it claim
-  // an otherwise empty reset root before submission. Never replace another
-  // real active account: that mismatch remains a hard cross-account fence.
-  if (action === 'reviewDraftUpsert' && root._meta.activeAccount === LEGACY_ACCOUNT &&
-      Object.keys(root.accounts).length === 0) {
-    const now = new Date().toISOString();
-    root._meta.activeAccount = accountId;
-    root._meta.updatedAt = now;
-    root._meta.lastWriteAt = now;
-    root._meta.lastError = null;
-    updates[STATE_KEY] = root;
-  }
-  await setLocal(updates);
+  // Draft persistence is deliberately not allowed to choose the active
+  // account. After Clear All, the content script must first verify a freshly
+  // fetched Letterboxd page and explicitly activate that confirmed account.
+  await setLocal({ [REVIEW_DRAFTS_KEY]: drafts });
   return { ok: true, removed: action === 'reviewDraftRemove', count: countReviewDrafts(drafts) };
 }
 

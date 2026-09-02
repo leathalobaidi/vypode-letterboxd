@@ -1,9 +1,30 @@
-# Swipe for Letterboxd v6.3.0-beta.6
+# Swipe for Letterboxd v6.3.0-beta.7
 
 > Formerly **Vypode for Letterboxd** — renamed to **Swipe for Letterboxd** in v6.1.0. Internal storage keys and APIs are unchanged, so existing local data carries over.
 
 
 A Chrome extension that adds a swipe-style interface and a local profile database for Letterboxd. It helps you move through films quickly, hide titles you have already handled, and search your own watched history by title, rating, liked status, and review text where Letterboxd exposes it.
+
+## What's New in v6.3.0-beta.7
+
+- **Fresh account check before every review** — Swipe now confirms the signed-in
+  Letterboxd account from a fresh, uncached film page before it submits. A stale
+  tab cannot attach a review to a different account after a login change.
+- **Clear All recovery is safer** — clearing local film data also forgets the
+  current tab's cached account. A verified review can relink the same account
+  immediately, including when Chrome retained an empty legacy account shell.
+  Other open tabs adopt the cleared state, and stale background saves cannot
+  reclaim or repopulate it.
+- **Account actions stay fenced** — Watched, Like, and Watchlist remain blocked
+  while cleared state is unclaimed. The final identity check now follows the
+  film-data request, closing the account-switch window before review delivery.
+- **Popup recovers without a reload** — after that verified relink, the toolbar
+  popup recognises the active session and enables Sync again. A failed or
+  mismatched verification marks the cached session inactive.
+- **Reviewed with pinned Matt Pocock skills** — the repository now contains a
+  pinned, auditable set of review, diagnosis, TDD, and design skills plus a
+  project-specific security and release checklist. These development files are
+  excluded from the runtime ZIP.
 
 ## What's New in v6.3.0-beta.6
 
@@ -128,9 +149,9 @@ There is no third-party cloud backup in this release. Your film registry is stor
 
 ## Installation
 
-### Testing v6.3.0-beta.6
+### Testing v6.3.0-beta.7
 
-1. Download and unzip `swipe-for-letterboxd-v6.3.0-beta.6.zip` from the beta release.
+1. Download and unzip `swipe-for-letterboxd-v6.3.0-beta.7.zip` from the beta release.
 2. Open `chrome://extensions/`, enable **Developer mode**, and choose **Load unpacked**.
 3. Select the unzipped folder containing `manifest.json`.
 4. Open a Letterboxd listing and launch **Swipe Deck**. Press **T** or use the

@@ -10,6 +10,8 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 const filmStateSource = fs.readFileSync(path.join(root, 'film-state.js'), 'utf8');
 const contentSource = fs.readFileSync(path.join(root, 'content.js'), 'utf8');
 const backgroundSource = fs.readFileSync(path.join(root, 'background.js'), 'utf8');
+const popupSource = fs.readFileSync(path.join(root, 'popup.js'), 'utf8');
+const popupHtml = fs.readFileSync(path.join(root, 'popup.html'), 'utf8');
 const nativeSetTimeout = globalThis.setTimeout;
 const nativeClearTimeout = globalThis.clearTimeout;
 const NativeURL = globalThis.URL;
@@ -44,11 +46,11 @@ function storageArea(initial = {}) {
   };
 }
 
-function signedInHeader() {
+function signedInHeader(username = 'BusyBees1') {
   return `<header>
-    <a href="/BusyBees1/">Profile</a>
-    <a href="/BusyBees1/films/">Films</a>
-    <a href="/BusyBees1/films/diary/">Diary</a>
+    <a href="/${username}/">Profile</a>
+    <a href="/${username}/films/">Films</a>
+    <a href="/${username}/films/diary/">Diary</a>
     <a href="/sign-out/">Sign Out</a>
   </header>`;
 }
@@ -68,8 +70,8 @@ function listingPage() {
   </body></html>`;
 }
 
-function singleFilmPage() {
-  return `<html><body>${signedInHeader()}
+function singleFilmPage(username = 'BusyBees1') {
+  return `<html><body>${signedInHeader(username)}
     <h1 class="headline-1">World War Z</h1>
     <p class="releaseyear"><a>2013</a></p>
     <div class="film-poster"><img src="https://img.test/world-war-z.jpg"></div>
@@ -80,8 +82,8 @@ function singleFilmPage() {
   </body></html>`;
 }
 
-function fetchedFilmPage() {
-  return `<html><body>${signedInHeader()}
+function fetchedFilmPage(username = 'BusyBees1') {
+  return `<html><body>${signedInHeader(username)}
     <h1 class="headline-1">Film</h1>
     <p class="releaseyear"><a>2026</a></p>
     <div class="film-poster"><img src="https://img.test/detail.jpg"></div>
@@ -151,6 +153,7 @@ async function runContent(html, url, {
   reviewPostBody = null,
   reviewPostStatus = 200,
   reviewFetch = null,
+  contentFetch = null,
   filmJson = {},
   diaryHtml = null,
   runtimeSendMessage = null
@@ -235,6 +238,10 @@ async function runContent(html, url, {
   window.fetch = async (requestUrl, options = {}) => {
     const requestHref = String(requestUrl);
     fetchCalls.push({ url: requestHref, options });
+    if (typeof contentFetch === 'function') {
+      const response = await contentFetch(requestHref, options);
+      if (response !== undefined) return response;
+    }
     if (failFilmFetch && !options.method) throw new Error('offline');
     if (new NativeURL(requestHref, url).pathname.endsWith('/json/')) {
       const body = { csrf: 'csrf-token', lid: 'film-lid', ...filmJson };
@@ -599,6 +606,8 @@ test('a review can be submitted immediately after clearing local film data', asy
   click(window.document, '#vypodeClearAll');
   await tick(30);
   assert.equal(chrome.storage.local.store.vypode_state._meta.activeAccount, '$legacy');
+  assert.equal(window.VypodeFilmState.getAccountId(), '$legacy',
+    'the clearing tab must also forget its cached account identity');
 
   click(window.document, '#vypodeSettingsClose');
   click(window.document, '#vypodeOpenReview');
@@ -611,7 +620,225 @@ test('a review can be submitted immediately after clearing local film data', asy
   const post = fetchCalls.find(call => call.options?.method === 'POST');
   assert.ok(post, 'the review should reach Letterboxd without a page refresh');
   assert.equal(chrome.storage.local.store.vypode_state._meta.activeAccount, 'user:busybees1');
+  assert.equal(chrome.storage.local.store.vypode_user?.username, 'BusyBees1');
+  assert.equal(chrome.storage.local.store.vypode_user?.active, true,
+    'fresh session verification should restore the popup login state after Clear All');
   assert.equal(window.VypodeFilmState.get('world-war-z').reviewText, 'Review after clearing local data');
+
+  const { window: popupDomWindow } = parseHTML(popupHtml);
+  let popupWindow;
+  popupWindow = new Proxy(popupDomWindow, {
+    get(target, property, receiver) {
+      if (property === 'window' || property === 'self' || property === 'globalThis') return popupWindow;
+      return Reflect.get(target, property, receiver);
+    }
+  });
+  chrome.storage.onChanged = { addListener() {} };
+  chrome.tabs = {
+    query(_query, callback) { callback([{ id: 1, url: 'https://letterboxd.com/film/world-war-z/' }]); },
+    sendMessage() {
+      return Promise.resolve({
+        ok: true,
+        supported: true,
+        capabilities: { resumeSwipe: true, syncNow: true, openSettings: true }
+      });
+    }
+  };
+  popupWindow.chrome = chrome;
+  popupWindow.URL = NativeURL;
+  popupWindow.setTimeout = nativeSetTimeout;
+  popupWindow.clearTimeout = nativeClearTimeout;
+  vm.createContext(popupWindow);
+  vm.runInContext(popupSource, popupWindow, { filename: 'popup.js' });
+  await tick(20);
+  assert.equal(popupWindow.document.querySelector('#syncNowBtn').disabled, false,
+    'the popup should recognise the freshly verified session without a page reload');
+});
+
+test('a stale tab cannot reclaim cleared state or submit through a different current session', async () => {
+  const today = new Date();
+  const watchedDate = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+  const { window, chrome, fetchCalls } = await runContent(
+    singleFilmPage('BusyBees1'),
+    'https://letterboxd.com/film/world-war-z/',
+    {
+      filmDetailHtml: fetchedFilmPage('DifferentUser'),
+      reviewPostBody: {
+        logEntry: {
+          id: 'must-not-submit',
+          review: { text: 'Wrong account' },
+          rating: 4,
+          diaryDetails: { diaryDate: watchedDate, rewatch: false },
+          like: false
+        }
+      }
+    }
+  );
+
+  click(window.document, '.vypode-toggle-btn');
+  click(window.document, '#vypodeOpenSettings');
+  click(window.document, '#vypodeClearAll');
+  await tick(30);
+  click(window.document, '#vypodeSettingsClose');
+  click(window.document, '#vypodeOpenReview');
+  await tick(15);
+  click(window.document, '[data-rating="4"]');
+  setControl(window, '#vypodeReviewText', 'Wrong account');
+  click(window.document, '#vypodeReviewSubmit');
+  await tick(100);
+
+  assert.equal(fetchCalls.some(call => call.source === 'worker'), false,
+    'the production-log POST must not run when a fresh page belongs to another account');
+  assert.equal(chrome.storage.local.store.vypode_state._meta.activeAccount, '$legacy');
+  assert.equal(chrome.storage.local.store.vypode_user?.username, 'DifferentUser');
+  assert.equal(chrome.storage.local.store.vypode_user?.active, false);
+  assert.match(window.document.body.textContent, /account changed|different Letterboxd account|refresh/i);
+});
+
+test('an account switch between film data and fresh identity verification blocks the review POST', async () => {
+  const today = new Date();
+  const watchedDate = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+  let currentSession = 'BusyBees1';
+  const response = body => ({
+    ok: true,
+    status: 200,
+    headers: { get: () => null },
+    text: async () => body
+  });
+  const { window, fetchCalls } = await runContent(
+    singleFilmPage(),
+    'https://letterboxd.com/film/world-war-z/',
+    {
+      contentFetch: async requestUrl => {
+        const pathname = new NativeURL(requestUrl).pathname;
+        if (pathname.endsWith('/json/')) {
+          currentSession = 'DifferentUser';
+          return response(JSON.stringify({ csrf: 'different-user-token', lid: 'film-lid' }));
+        }
+        if (pathname === '/film/world-war-z/') return response(fetchedFilmPage(currentSession));
+        return undefined;
+      },
+      reviewPostBody: {
+        logEntry: {
+          id: 'must-not-submit-after-switch',
+          review: { text: 'Wrong session race' },
+          rating: 4,
+          diaryDetails: { diaryDate: watchedDate, rewatch: false },
+          like: false
+        }
+      }
+    }
+  );
+
+  click(window.document, '.vypode-toggle-btn');
+  click(window.document, '#vypodeOpenReview');
+  await tick(15);
+  click(window.document, '[data-rating="4"]');
+  setControl(window, '#vypodeReviewText', 'Wrong session race');
+  click(window.document, '#vypodeReviewSubmit');
+  await tick(100);
+
+  assert.equal(fetchCalls.some(call => call.source === 'worker'), false);
+  assert.match(window.document.body.textContent, /different|account|refresh/i);
+});
+
+test('failed fresh identity verification deactivates the popup session and keeps the draft', async () => {
+  const { window, chrome, fetchCalls } = await runContent(
+    singleFilmPage(),
+    'https://letterboxd.com/film/world-war-z/',
+    {
+      filmDetailHtml: fetchedFilmPage('DifferentUser'),
+      local: {
+        vypode_user: { username: 'BusyBees1', active: true },
+        vypode_state: {
+          _meta: { version: 3, generation: 0, activeAccount: 'user:busybees1' },
+          accounts: {
+            'user:busybees1': { _meta: { version: 3 }, slugs: {} }
+          }
+        }
+      }
+    }
+  );
+
+  click(window.document, '.vypode-toggle-btn');
+  click(window.document, '#vypodeOpenReview');
+  await tick(15);
+  setControl(window, '#vypodeReviewText', 'Keep this account-bound draft');
+  click(window.document, '#vypodeReviewSubmit');
+  await tick(100);
+
+  assert.equal(fetchCalls.some(call => call.source === 'worker'), false);
+  assert.equal(chrome.storage.local.store.vypode_user?.active, false);
+  assert.equal(
+    chrome.storage.local.store.vypode_review_drafts_v1?.['user:busybees1']?.['world-war-z']?.reviewText,
+    'Keep this account-bound draft'
+  );
+});
+
+test('an unavailable fresh identity check after Clear All keeps legacy state and the draft', async () => {
+  const jsonResponse = {
+    ok: true,
+    status: 200,
+    headers: { get: () => null },
+    text: async () => JSON.stringify({ csrf: 'session-token', lid: 'film-lid' })
+  };
+  const { window, chrome, fetchCalls } = await runContent(
+    singleFilmPage(),
+    'https://letterboxd.com/film/world-war-z/',
+    {
+      contentFetch: async requestUrl => {
+        const pathname = new NativeURL(requestUrl).pathname;
+        if (pathname.endsWith('/json/')) return jsonResponse;
+        if (pathname === '/film/world-war-z/') throw new Error('verification offline');
+        return undefined;
+      }
+    }
+  );
+
+  click(window.document, '.vypode-toggle-btn');
+  click(window.document, '#vypodeOpenSettings');
+  click(window.document, '#vypodeClearAll');
+  await tick(30);
+  click(window.document, '#vypodeSettingsClose');
+  click(window.document, '#vypodeOpenReview');
+  await tick(15);
+  setControl(window, '#vypodeReviewText', 'Keep this offline draft');
+  click(window.document, '#vypodeReviewSubmit');
+  await tick(100);
+
+  assert.equal(fetchCalls.some(call => call.source === 'worker'), false);
+  assert.equal(window.VypodeFilmState.getAccountId(), '$legacy');
+  assert.equal(chrome.storage.local.store.vypode_state._meta.activeAccount, '$legacy');
+  assert.equal(
+    chrome.storage.local.store.vypode_review_drafts_v1?.['user:busybees1']?.['world-war-z']?.reviewText,
+    'Keep this offline draft'
+  );
+  assert.match(window.document.body.textContent, /verification offline|try again/i);
+});
+
+test('account actions stay blocked in the legacy clear state until review verification relinks it', async () => {
+  const { window, runtimeMessages } = await runContent(
+    listingPage(),
+    'https://letterboxd.com/films/popular/'
+  );
+  click(window.document, '.vypode-toggle-btn');
+  await tick(20);
+  click(window.document, '#vypodeOpenSettings');
+  click(window.document, '#vypodeClearAll');
+  await tick(30);
+  click(window.document, '#vypodeSettingsClose');
+  const messageCountAfterClear = runtimeMessages.length;
+
+  keydown(window, 'ArrowLeft');
+  await tick(40);
+
+  assert.equal(window.VypodeFilmState.getAccountId(), '$legacy');
+  assert.notEqual(window.VypodeFilmState.get('colony-2026')?.watched, true);
+  assert.equal(runtimeMessages.slice(messageCountAfterClear).some(message =>
+    message.action === 'outboxUpsert' ||
+    (message.action === 'mergeAccount' && message.data.accountId === 'user:busybees1')
+  ), false);
+  assert.match(window.document.body.textContent, /log in|refresh/i);
 });
 
 test('reviewing a liked film preserves its like in the submitted entry and local state', async () => {

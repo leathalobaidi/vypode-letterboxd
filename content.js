@@ -1,4 +1,4 @@
-// SWIPE FOR LETTERBOXD — Content Script v6.3.0-beta.6
+// SWIPE FOR LETTERBOXD — Content Script v6.3.0-beta.7
 // Background actions + auto-advance + auto-next-page + Trailer keyboard playback + Voice Review + Star Rating
 // v6.0.0: FilmState registry, fresh poster filtering, durable skip,
 //         account awareness, collection sync, settings panel, local profile database
@@ -8,6 +8,7 @@
 // v6.3.0-beta.3: trailer shortcut and resilient review dictation
 // v6.3.0-beta.4: cold-start and toggle trailer playback with K or Space
 // v6.3.0-beta.6: review submission resumes after Clear All without a page reload
+// v6.3.0-beta.7: fresh account verification fences review submission after Clear All
 (function() {
   'use strict';
   if (window.vypodeInjected) return;
@@ -635,13 +636,14 @@
     }
   }
 
-  function requireActiveLetterboxdSession(actionLabel) {
+  function requireActiveLetterboxdSession(actionLabel, options) {
     const session = readLetterboxdSession(document);
     const accountId = window.VypodeFilmState?.getAccountId?.();
     const expectedId = session.username ? `user:${session.username.toLowerCase()}` : null;
+    const allowLegacy = options?.allowLegacy === true;
     if (session.active && isLetterboxdSessionActive &&
         session.username?.toLowerCase() === letterboxdUsername?.toLowerCase() &&
-        (!accountId || accountId === expectedId)) return true;
+        (!accountId || accountId === expectedId || (allowLegacy && accountId === '$legacy'))) return true;
     const action = actionLabel || 'change films on Letterboxd';
     showFeedback(`Log in to Letterboxd to ${action}`, 'error');
     return false;
@@ -2514,6 +2516,82 @@
     }
   }
 
+  async function fetchFreshReviewSession(url) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 15000);
+    try {
+      const response = await fetch(url, {
+        credentials: 'same-origin',
+        cache: 'no-store',
+        signal: controller.signal
+      });
+      if (!response.ok) throw new Error('Account verification page failed: ' + response.status);
+      const text = await response.text();
+      if (text.length > 1024 * 1024) throw new Error('Account verification page was too large');
+      const parsed = new DOMParser().parseFromString(text, 'text/html');
+      return readLetterboxdSession(parsed);
+    } catch (error) {
+      if (controller.signal.aborted) throw new Error('Account verification timed out');
+      throw error;
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+
+  async function verifyFreshReviewAccount(binding, canonicalFilmUrl) {
+    const expectedAccountId = binding?.accountId;
+    const expectedUsername = typeof expectedAccountId === 'string' && expectedAccountId.startsWith('user:')
+      ? expectedAccountId.slice(5)
+      : null;
+    if (!expectedUsername || !/^[a-z0-9_]{1,64}$/i.test(expectedUsername)) {
+      throw new Error('Review has no valid Letterboxd account');
+    }
+
+    const session = await fetchFreshReviewSession(canonicalFilmUrl);
+    if (!session.active || session.username?.toLowerCase() !== expectedUsername.toLowerCase()) {
+      isLetterboxdSessionActive = false;
+      const observedUsername = typeof session.username === 'string' && /^[a-z0-9_]{1,64}$/i.test(session.username)
+        ? session.username
+        : expectedUsername;
+      const checkedAt = new Date().toISOString();
+      try {
+        await writeLocalStorage({
+          vypode_user: {
+            username: observedUsername,
+            detectedAt: checkedAt,
+            lastCheckedAt: checkedAt,
+            active: false
+          }
+        });
+      } catch {}
+      throw new Error(session.active
+        ? `A fresh Letterboxd page is signed in as ${session.username}, not ${expectedUsername}. Refresh this tab before submitting.`
+        : 'A fresh Letterboxd page could not confirm a signed-in account. Refresh this tab before submitting.');
+    }
+
+    const stateAccountId = window.VypodeFilmState?.getAccountId?.();
+    if (stateAccountId !== expectedAccountId) {
+      if (stateAccountId && stateAccountId !== '$legacy') {
+        throw new Error('The active Swipe account changed. Refresh this tab before submitting.');
+      }
+      if (typeof window.VypodeFilmState?.switchAccount !== 'function') {
+        throw new Error('Swipe could not reactivate the verified Letterboxd account');
+      }
+      await window.VypodeFilmState.switchAccount(expectedAccountId);
+    }
+
+    letterboxdUsername = session.username;
+    isLetterboxdSessionActive = true;
+    await writeLocalStorage({
+      vypode_user: {
+        username: session.username,
+        detectedAt: new Date().toISOString(),
+        active: true
+      }
+    });
+    return session;
+  }
+
   async function sendReviewSubmissionCommand(data) {
     const sendMessage = chrome.runtime?.sendMessage;
     if (typeof sendMessage !== 'function') throw new Error('Review service is unavailable');
@@ -2598,7 +2676,7 @@
   // the page/account/generation and commits confirmed local state even if this
   // tab closes before the response returns.
   async function submitReview(filmUrl, rawDraft, binding) {
-    if (!requireActiveLetterboxdSession('submit reviews')) return;
+    if (!requireActiveLetterboxdSession('submit reviews', { allowLegacy: true })) return;
     if (isProcessingAction) return;
     let parsedFilmUrl;
     try { parsedFilmUrl = new URL(filmUrl, window.location.href); }
@@ -2650,12 +2728,16 @@
       const canonicalUrl = 'https://letterboxd.com/film/' + filmSlug + '/';
       const filmDataUrl = canonicalUrl + 'json/';
       const filmData = await fetchReviewFilmJson(filmDataUrl);
+      await verifyFreshReviewAccount(binding || { accountId }, canonicalUrl);
       if (!reviewContextMatchesCurrentAccount(binding || { accountId })) {
         showFeedback('Review not submitted because the Letterboxd account changed. Draft kept.', 'error');
         return { status: 'account-changed' };
       }
 
-      const csrf = readCsrfToken(document) || filmData.csrf;
+      // Use the film JSON token fetched before the final identity check. If the
+      // login changes after verification, this earlier session-bound token
+      // should fail instead of acquiring a valid token for an unverified user.
+      const csrf = filmData.csrf || readCsrfToken(document);
       const productionId = filmData.lid;
       const storedFilm = window.VypodeFilmState?.get?.(filmSlug);
       const liveFilmState = !isListingPage ? getStates() : null;
@@ -4980,7 +5062,7 @@
           <input type="file" id="vypodeImportFile" accept=".json" style="display:none">
         </div>
 
-        <div class="vypode-settings-footer">Swipe for Letterboxd v6.3.0-beta.6</div>
+        <div class="vypode-settings-footer">Swipe for Letterboxd v6.3.0-beta.7</div>
       </div>
     `;
 

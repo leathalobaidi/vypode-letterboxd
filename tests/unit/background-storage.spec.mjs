@@ -52,11 +52,11 @@ function loadBackground(local, options = {}) {
   };
 }
 
-function merge(accountId, slug, flag) {
+function merge(accountId, slug, flag, generation = 0) {
   const timestamp = '2026-01-01T00:00:00.000Z';
   return {
     type: 'vypode-state', action: 'mergeAccount', data: {
-      accountId, generation: 0, meta: { updatedAt: timestamp }, slugs: {
+      accountId, generation, meta: { updatedAt: timestamp }, slugs: {
         [slug]: { [flag]: true, [`${flag}ChangedAt`]: timestamp, [`${flag}Source`]: 'userAction', updatedAt: timestamp }
       }
     }
@@ -176,6 +176,24 @@ test('two callers are serialized: account merges and interleaved outbox commands
   const third = background.request(outbox('parasite', 'watchlist'));
   await Promise.all([removal, third]);
   assert.deepEqual(Object.keys(local.store.vypode_action_outbox_v1).sort(), ['moonlight', 'parasite']);
+});
+
+test('a stale account merge cannot reclaim a root cleared by another tab', async () => {
+  const local = sharedLocal({
+    vypode_state: {
+      _meta: { version: 3, generation: 1, activeAccount: '$legacy' },
+      accounts: {}
+    }
+  });
+  const background = loadBackground(local);
+
+  const result = await background.request(merge('user:alice', 'arrival', 'watched', 1));
+
+  assert.equal(result.ok, false);
+  assert.equal(result.stale, true);
+  assert.equal(result.activeAccount, '$legacy');
+  assert.equal(local.store.vypode_state._meta.activeAccount, '$legacy');
+  assert.equal(local.store.vypode_state.accounts['user:alice'], undefined);
 });
 
 test('serialized claims dedupe account-film-action work and permit exactly one tab to dispatch', async () => {
@@ -493,7 +511,7 @@ test('review drafts are serialized, isolated by account and film, and removable'
   assert.equal(local.store.vypode_review_drafts_v1['user:bob'].arrival.reviewText, 'Bob draft');
 });
 
-test('a new review draft after Clear All reactivates the current account and can submit without a refresh', async () => {
+test('a review draft after Clear All cannot choose the active account without fresh session verification', async () => {
   const local = sharedLocal();
   let calls = 0;
   const background = loadBackground(local, { fetch: async () => {
@@ -515,7 +533,18 @@ test('a new review draft after Clear All reactivates the current account and can
   savedDraft.data.generation = 1;
   const saved = await background.request(savedDraft);
   assert.equal(saved.ok, true);
-  assert.equal(local.store.vypode_state._meta.activeAccount, 'user:alice');
+  assert.equal(local.store.vypode_state._meta.activeAccount, '$legacy');
+
+  const blocked = await background.request(reviewSubmission({
+    generation: 1,
+    requestId: 'unverified-review-after-clear',
+    draftRevision: 1
+  }), reviewSender);
+  assert.equal(blocked.code, 'context-changed');
+  assert.equal(calls, 0);
+
+  const activated = await background.request(activate('user:alice', 1));
+  assert.equal(activated.ok, true);
 
   const submitted = await background.request(reviewSubmission({
     generation: 1,
@@ -525,6 +554,29 @@ test('a new review draft after Clear All reactivates the current account and can
   assert.equal(submitted.confirmed, true);
   assert.equal(calls, 1);
   assert.equal(local.store.vypode_state.accounts['user:alice'].slugs.arrival.reviewText, 'A careful review');
+});
+
+test('fresh account activation works when reset state contains one empty legacy account', async () => {
+  const local = sharedLocal({
+    vypode_state: {
+      _meta: { version: 3, generation: 4, activeAccount: '$legacy' },
+      accounts: {
+        $legacy: { _meta: { version: 3 }, slugs: {} }
+      }
+    }
+  });
+  const background = loadBackground(local);
+  const savedDraft = reviewDraft('arrival', { revision: 2 });
+  savedDraft.data.generation = 4;
+
+  const saved = await background.request(savedDraft);
+  assert.equal(saved.ok, true);
+  assert.equal(local.store.vypode_state._meta.activeAccount, '$legacy');
+
+  const activated = await background.request(activate('user:alice', 4));
+  assert.equal(activated.ok, true);
+  assert.equal(local.store.vypode_state._meta.activeAccount, 'user:alice');
+  assert.deepEqual(Object.keys(local.store.vypode_state.accounts).sort(), ['$legacy', 'user:alice']);
 });
 
 test('a review draft cannot replace a different active account', async () => {

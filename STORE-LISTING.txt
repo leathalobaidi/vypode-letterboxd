@@ -1,8 +1,8 @@
-SWIPE FOR LETTERBOXD — CHROME WEB STORE LISTING (v6.3.0-beta.6)
+SWIPE FOR LETTERBOXD — CHROME WEB STORE LISTING (v6.3.0-beta.7)
 ================================================================
 (Formerly "Vypode for Letterboxd". Internal storage keys/APIs unchanged.)
 Build with `npm run release:check`, then upload the generated runtime-only archive
-`dist/swipe-for-letterboxd-v6.3.0-beta.6.zip` at https://chrome.google.com/webstore/devconsole
+`dist/swipe-for-letterboxd-v6.3.0-beta.7.zip` at https://chrome.google.com/webstore/devconsole
 Manifest version: 6.3.0 (unpacked beta only; do not upload before stable v6.3.0)
 
 ────────────────────────────────────────────────────────────────────────
@@ -168,7 +168,7 @@ GRAPHICS TO UPLOAD  (all in repo/store-assets/, 24-bit PNG no-alpha)
 ────────────────────────────────────────────────────────────────────────
 IMPORTANT: the checked-in screenshots predate the beta series' visible deck action
 bar and must be recaptured before a stable Web Store submission. Do not present
-them as current beta.6 screenshots.
+them as current beta.7 screenshots.
 1. Icon 128×128         — store-assets/swipe-store-icon-128.png
 2. Screenshots (1280×800, ≥1) — store-assets/swipe-1-deck.png  +  store-assets/swipe-2-database.png
 3. Small promo (440×280)      — store-assets/swipe-promo-440x280.png

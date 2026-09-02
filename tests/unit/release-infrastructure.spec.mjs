@@ -11,12 +11,12 @@ test('beta display version is consistent across release-facing files', () => {
   const manifest = JSON.parse(read('manifest.json'));
   const releaseFiles = ['README.md', 'STORE-LISTING.txt', 'content.js', 'popup.html', 'styles.css'];
 
-  assert.equal(manifest.version_name, '6.3.0-beta.6');
+  assert.equal(manifest.version_name, '6.3.0-beta.7');
   for (const file of releaseFiles) {
-    assert.match(read(file), /6\.3\.0-beta\.6/, `${file} should identify beta.6`);
+    assert.match(read(file), /6\.3\.0-beta\.7/, `${file} should identify beta.7`);
   }
-  for (const file of ['STORE-LISTING.txt', 'content.js', 'popup.html', 'styles.css']) {
-    assert.doesNotMatch(read(file), /6\.3\.0-beta\.5/, `${file} should not display the previous beta`);
+  for (const file of ['STORE-LISTING.txt', 'popup.html', 'styles.css']) {
+    assert.doesNotMatch(read(file), /6\.3\.0-beta\.6/, `${file} should not display the previous beta`);
   }
 });
 
@@ -59,7 +59,7 @@ test('store listing explains every requested permission', () => {
   assert.doesNotMatch(listing, /Personally identifiable information: No/i);
   assert.match(listing, /Host permission — https:\/\/api\.letterboxd\.com\/\*:/);
   assert.match(listing, /LIMITED USE DISCLOSURE:/);
-  assert.match(listing, /dist\/swipe-for-letterboxd-v6\.3\.0-beta\.6\.zip/);
+  assert.match(listing, /dist\/swipe-for-letterboxd-v6\.3\.0-beta\.7\.zip/);
   assert.doesNotMatch(listing, /zip the repo root/i);
 });
 

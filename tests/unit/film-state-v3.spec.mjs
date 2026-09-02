@@ -60,6 +60,40 @@ test('cached user selects the matching account while an unowned legacy blob stay
   assert.equal(unowned.localStore.vypode_state.accounts.$legacy.slugs.parasite.title, 'Parasite');
 });
 
+test('a newer cross-tab clear adopts the legacy account and cancels a pending stale save', async () => {
+  const runtime = createFilmStateRuntime();
+  await runtime.api.init('Alice');
+  runtime.api.updateFilm('arrival', { title: 'Arrival' }, 'domSync');
+
+  const oldValue = runtime.localStore.vypode_state || {
+    _meta: { version: 3, generation: 0, activeAccount: 'user:alice' },
+    accounts: {}
+  };
+  const cleared = {
+    _meta: { version: 3, generation: 1, activeAccount: '$legacy' },
+    accounts: {}
+  };
+  runtime.localStore.vypode_state = cleared;
+  runtime.localStore.vypode_user = null;
+  runtime.emitStorageChange({
+    vypode_state: { oldValue, newValue: cleared },
+    vypode_user: { oldValue: { username: 'Alice', active: true }, newValue: null }
+  });
+
+  assert.equal(runtime.api.getAccountId(), '$legacy');
+  assert.equal(runtime.api.get('arrival'), null);
+  await waitForDebounce();
+  assert.equal(runtime.sentMessages.some(message =>
+    message.action === 'mergeAccount' && message.data.accountId === 'user:alice'
+  ), false, 'the pending pre-clear debounce must not hand off Alice data');
+
+  runtime.api.updateFilm('moonlight', { title: 'Moonlight' }, 'domSync');
+  await runtime.api.flush();
+  const lastMerge = runtime.sentMessages.filter(message => message.action === 'mergeAccount').at(-1);
+  assert.equal(lastMerge?.data.accountId, '$legacy');
+  assert.equal(lastMerge?.data.generation, 1);
+});
+
 test('imports validate every value before mutating the active account', async () => {
   const runtime = createFilmStateRuntime();
   await runtime.api.init('Alice');

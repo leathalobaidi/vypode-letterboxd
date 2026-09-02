@@ -149,7 +149,9 @@ test('account-changing actions require an active Letterboxd session', () => {
   assert.match(contentJs, /ACCOUNT_ACTIONS = new Set\(\['watch', 'like', 'watchlist'\]\)/);
   assert.match(contentJs, /requireActiveLetterboxdSession\(labels\[action\]\)/);
   assert.match(contentJs, /requireActiveLetterboxdSession\(actionLabels\[action\]\)/);
-  assert.match(contentJs, /if \(!requireActiveLetterboxdSession\('submit reviews'\)\) return/);
+  assert.match(contentJs, /if \(!requireActiveLetterboxdSession\('submit reviews', \{ allowLegacy: true \}\)\) return/);
+  assert.equal((contentJs.match(/allowLegacy: true/g) || []).length, 1,
+    'only verified review recovery may proceed from the legacy account');
   assert.match(contentJs, /Log in to submit/);
 });
 
@@ -347,7 +349,9 @@ test('single film state detection handles current Letterboxd action classes', ()
 test('review submission uses the service worker and fixed Letterboxd production-log api', () => {
   assert.match(contentJs, /function readCsrfToken/);
   assert.match(contentJs, /value && value !== 'placeholder'/);
-  assert.match(contentJs, /const csrf = readCsrfToken\(document\) \|\| filmData\.csrf/);
+  assert.match(contentJs, /const csrf = filmData\.csrf \|\| readCsrfToken\(document\)/);
+  assert.match(contentJs, /verifyFreshReviewAccount\(binding, canonicalFilmUrl\)/);
+  assert.match(contentJs, /cache: 'no-store'/);
   assert.match(contentJs, /const productionId = filmData\.lid/);
   assert.match(contentJs, /type: 'vypode-review', action: 'submit'/);
   assert.doesNotMatch(contentJs, /api\/v0\/production-log-entries/);

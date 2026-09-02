@@ -277,6 +277,7 @@ test('clearAll removes local registry while preserving synced preferences', asyn
 
   assert.equal(localStore.vypode_state._meta.version, 3);
   assert.equal(localStore.vypode_state._meta.generation, 1);
+  assert.equal(api.getAccountId(), '$legacy');
   assert.deepEqual(plain(localStore.vypode_state.accounts), {});
   assert.deepEqual(plain(localStore.vypode_action_outbox_v1), {});
   assert.deepEqual(plain(localStore.vypode_action_outcomes_v1), {});
