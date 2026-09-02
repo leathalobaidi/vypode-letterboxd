@@ -1090,7 +1090,21 @@ async function applyReviewDraftCommand(action, data) {
   } else {
     throw new Error(`Unsupported review draft action: ${action}`);
   }
-  await setLocal({ [REVIEW_DRAFTS_KEY]: drafts });
+  const updates = { [REVIEW_DRAFTS_KEY]: drafts };
+  // Clear All deliberately forgets the saved account by returning the root to
+  // $legacy. A new draft is an explicit account-bound action, so let it claim
+  // an otherwise empty reset root before submission. Never replace another
+  // real active account: that mismatch remains a hard cross-account fence.
+  if (action === 'reviewDraftUpsert' && root._meta.activeAccount === LEGACY_ACCOUNT &&
+      Object.keys(root.accounts).length === 0) {
+    const now = new Date().toISOString();
+    root._meta.activeAccount = accountId;
+    root._meta.updatedAt = now;
+    root._meta.lastWriteAt = now;
+    root._meta.lastError = null;
+    updates[STATE_KEY] = root;
+  }
+  await setLocal(updates);
   return { ok: true, removed: action === 'reviewDraftRemove', count: countReviewDrafts(drafts) };
 }
 

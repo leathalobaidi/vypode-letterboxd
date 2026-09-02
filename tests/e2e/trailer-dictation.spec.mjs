@@ -575,6 +575,45 @@ test('a verified production-log response submits a review and records its local 
   assert.equal(window.document.querySelector('.vypode-review-panel')?.classList.contains('visible'), false);
 });
 
+test('a review can be submitted immediately after clearing local film data', async () => {
+  const today = new Date();
+  const watchedDate = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+  const { window, chrome, fetchCalls } = await runContent(
+    singleFilmPage(),
+    'https://letterboxd.com/film/world-war-z/',
+    {
+      reviewPostBody: {
+        logEntry: {
+          id: 'entry-after-clear',
+          review: { text: 'Review after clearing local data' },
+          rating: 4,
+          diaryDetails: { diaryDate: watchedDate, rewatch: false },
+          like: false
+        }
+      }
+    }
+  );
+
+  click(window.document, '.vypode-toggle-btn');
+  click(window.document, '#vypodeOpenSettings');
+  click(window.document, '#vypodeClearAll');
+  await tick(30);
+  assert.equal(chrome.storage.local.store.vypode_state._meta.activeAccount, '$legacy');
+
+  click(window.document, '#vypodeSettingsClose');
+  click(window.document, '#vypodeOpenReview');
+  await tick(15);
+  click(window.document, '[data-rating="4"]');
+  setControl(window, '#vypodeReviewText', 'Review after clearing local data');
+  click(window.document, '#vypodeReviewSubmit');
+  await tick(80);
+
+  const post = fetchCalls.find(call => call.options?.method === 'POST');
+  assert.ok(post, 'the review should reach Letterboxd without a page refresh');
+  assert.equal(chrome.storage.local.store.vypode_state._meta.activeAccount, 'user:busybees1');
+  assert.equal(window.VypodeFilmState.get('world-war-z').reviewText, 'Review after clearing local data');
+});
+
 test('reviewing a liked film preserves its like in the submitted entry and local state', async () => {
   const today = new Date();
   const watchedDate = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;

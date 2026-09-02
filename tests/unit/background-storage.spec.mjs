@@ -493,6 +493,58 @@ test('review drafts are serialized, isolated by account and film, and removable'
   assert.equal(local.store.vypode_review_drafts_v1['user:bob'].arrival.reviewText, 'Bob draft');
 });
 
+test('a new review draft after Clear All reactivates the current account and can submit without a refresh', async () => {
+  const local = sharedLocal();
+  let calls = 0;
+  const background = loadBackground(local, { fetch: async () => {
+    calls += 1;
+    return reviewResponse(200);
+  } });
+  await background.request(activate());
+  const cleared = await background.request({
+    type: 'vypode-state', action: 'clearAll', data: { accountId: 'user:alice', generation: 1 }
+  });
+  assert.equal(cleared.ok, true);
+  assert.equal(local.store.vypode_state._meta.activeAccount, '$legacy',
+    'clearing still forgets the saved account until the next explicit account-bound action');
+
+  const savedDraft = reviewDraft('arrival', {
+    revision: 1,
+    updatedAt: '2026-01-02T00:00:00.000Z'
+  });
+  savedDraft.data.generation = 1;
+  const saved = await background.request(savedDraft);
+  assert.equal(saved.ok, true);
+  assert.equal(local.store.vypode_state._meta.activeAccount, 'user:alice');
+
+  const submitted = await background.request(reviewSubmission({
+    generation: 1,
+    requestId: 'first-review-after-clear',
+    draftRevision: 1
+  }), reviewSender);
+  assert.equal(submitted.confirmed, true);
+  assert.equal(calls, 1);
+  assert.equal(local.store.vypode_state.accounts['user:alice'].slugs.arrival.reviewText, 'A careful review');
+});
+
+test('a review draft cannot replace a different active account', async () => {
+  const local = sharedLocal();
+  let calls = 0;
+  const background = loadBackground(local, { fetch: async () => {
+    calls += 1;
+    return reviewResponse(200);
+  } });
+  await background.request(activate('user:bob'));
+  await background.request(reviewDraft('arrival'));
+  assert.equal(local.store.vypode_state._meta.activeAccount, 'user:bob');
+
+  const submitted = await background.request(reviewSubmission({
+    requestId: 'alice-draft-while-bob-active'
+  }), reviewSender);
+  assert.equal(submitted.code, 'context-changed');
+  assert.equal(calls, 0);
+});
+
 test('review draft validation rejects unsafe and unbounded records without changing storage', async () => {
   const local = sharedLocal();
   const background = loadBackground(local);

@@ -1,9 +1,18 @@
-# Swipe for Letterboxd v6.3.0-beta.5
+# Swipe for Letterboxd v6.3.0-beta.6
 
 > Formerly **Vypode for Letterboxd** — renamed to **Swipe for Letterboxd** in v6.1.0. Internal storage keys and APIs are unchanged, so existing local data carries over.
 
 
 A Chrome extension that adds a swipe-style interface and a local profile database for Letterboxd. It helps you move through films quickly, hide titles you have already handled, and search your own watched history by title, rating, liked status, and review text where Letterboxd exposes it.
+
+## What's New in v6.3.0-beta.6
+
+- **Reviews work immediately after clearing local data** — after using *Clear
+  local film data*, you can open Review and submit without refreshing the page
+  or performing another action first.
+- **Clear still forgets the saved account** — the account is linked again only
+  when you explicitly save a new review draft, and a draft can never replace a
+  different active Letterboxd account.
 
 ## What's New in v6.3.0-beta.5
 
@@ -119,9 +128,9 @@ There is no third-party cloud backup in this release. Your film registry is stor
 
 ## Installation
 
-### Testing v6.3.0-beta.5
+### Testing v6.3.0-beta.6
 
-1. Download and unzip `swipe-for-letterboxd-v6.3.0-beta.5.zip` from the beta release.
+1. Download and unzip `swipe-for-letterboxd-v6.3.0-beta.6.zip` from the beta release.
 2. Open `chrome://extensions/`, enable **Developer mode**, and choose **Load unpacked**.
 3. Select the unzipped folder containing `manifest.json`.
 4. Open a Letterboxd listing and launch **Swipe Deck**. Press **T** or use the

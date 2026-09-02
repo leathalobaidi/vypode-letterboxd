@@ -1,4 +1,4 @@
-// SWIPE FOR LETTERBOXD — Content Script v6.3.0-beta.5
+// SWIPE FOR LETTERBOXD — Content Script v6.3.0-beta.6
 // Background actions + auto-advance + auto-next-page + Trailer keyboard playback + Voice Review + Star Rating
 // v6.0.0: FilmState registry, fresh poster filtering, durable skip,
 //         account awareness, collection sync, settings panel, local profile database
@@ -7,7 +7,7 @@
 // v6.1.0: rebrand Vypode → "Swipe for Letterboxd" (user-facing strings only)
 // v6.3.0-beta.3: trailer shortcut and resilient review dictation
 // v6.3.0-beta.4: cold-start and toggle trailer playback with K or Space
-// v6.3.0-beta.5: verified account actions, safe sync, and account-scoped state
+// v6.3.0-beta.6: review submission resumes after Clear All without a page reload
 (function() {
   'use strict';
   if (window.vypodeInjected) return;
@@ -4980,7 +4980,7 @@
           <input type="file" id="vypodeImportFile" accept=".json" style="display:none">
         </div>
 
-        <div class="vypode-settings-footer">Swipe for Letterboxd v6.3.0-beta.5</div>
+        <div class="vypode-settings-footer">Swipe for Letterboxd v6.3.0-beta.6</div>
       </div>
     `;
 
