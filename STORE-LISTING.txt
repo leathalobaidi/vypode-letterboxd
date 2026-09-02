@@ -1,15 +1,15 @@
-SWIPE FOR LETTERBOXD — CHROME WEB STORE LISTING (v6.3.0-beta.4)
+SWIPE FOR LETTERBOXD — CHROME WEB STORE LISTING (v6.3.0-beta.5)
 ================================================================
 (Formerly "Vypode for Letterboxd". Internal storage keys/APIs unchanged.)
-Upload: zip the repo root (the folder containing manifest.json) as a new package
-version on https://chrome.google.com/webstore/devconsole
+Build with `npm run release:check`, then upload the generated runtime-only archive
+`dist/swipe-for-letterboxd-v6.3.0-beta.5.zip` at https://chrome.google.com/webstore/devconsole
 Manifest version: 6.3.0 (unpacked beta only; do not upload before stable v6.3.0)
 
 ────────────────────────────────────────────────────────────────────────
 STORE LISTING TAB
 ────────────────────────────────────────────────────────────────────────
 
-NAME: Mando. 
+NAME:
 Swipe for Letterboxd
 
 SUMMARY (≤132 chars):
@@ -23,7 +23,8 @@ your own viewing history.
 WHAT IT DOES
 • Swipe deck — On listing pages (popular, watchlist, lists), open a deck of FRESH
   films (ones you haven't watched, liked, watch-listed, or skipped) and act on each
-  with a swipe or keyboard shortcut: watched, like, watchlist, or skip.
+  with a visible button, swipe, or keyboard shortcut: watched, like, watchlist,
+  or skip.
 • Local profile database — Run Collection Sync (while logged in) to build an
   on-device registry of your watched films with title, year, director, genres,
   poster, star rating, liked status, and review text where Letterboxd exposes it.
@@ -35,14 +36,29 @@ WHAT IT DOES
   press K to start the unopened YouTube trailer, then K or Space to pause/resume.
 • Quick review — Write and submit a star rating + review from the deck, with
   browser dictation where the browser supplies a working recognition service.
+  Swipe prevents a known existing diary entry from being mistaken for an edit;
+  logging another viewing requires an explicit Rewatch confirmation.
+• Toolbar status and actions — Check whether the current Letterboxd tab is ready,
+  see pending account actions, resume Swipe, start profile sync, or open settings
+  from the extension popup.
 
 PRIVACY & WHERE YOUR DATA LIVES
 • Your film registry is stored locally in your browser (chrome.storage). There is no
   account with us or developer-operated server, and nothing is sent to us.
+• Your Letterboxd username and a matching local account ID are stored in the browser
+  only to keep different profiles separated. They are never sent to the developer.
 • Preferences sync via Chrome's built-in sync storage only.
 • Dictation uses the browser or operating system speech service; the extension does
   not receive or store microphone audio. Trailer links may load Letterboxd and its
   YouTube player only after the user opens one.
+• On an explicit Review Submit, the review/rating/date/tags/options and a transient
+  CSRF token are sent directly to Letterboxd over HTTPS. They are never sent to the
+  extension developer, an analytics service, or a developer-operated server.
+• Clearing local film data keeps Chrome-synced interface preferences. If an account
+  action or review may already have reached Letterboxd, Swipe retains only a minimal
+  account/film verification record until the film is checked. Unsent actions and
+  drafts are removed; the retained records contain no review text, submitted review
+  payload, cookie, or CSRF token.
 
 CATEGORY:
 Productivity   (alternative: Entertainment)
@@ -67,14 +83,24 @@ DATA USE CERTIFICATIONS — CHECK ALL THREE:
 [x] Does not use/transfer user data to determine creditworthiness / for lending
 
 DATA COLLECTION:
-• Personally identifiable information: No
-• Health / Financial / Authentication / Location / Communications: No
-• Web history: No
-• User activity: No
+• Personally identifiable information: YES — the detected Letterboxd username and
+  matching local account ID are stored ON YOUR DEVICE to keep profile data separated.
+  They are never sent to the developer or any third party.
+• Authentication information: YES — the active Letterboxd session and CSRF token are
+  used transiently only to authenticate an account action the user explicitly requests.
+  Swipe does not store the token or cookies, and sends them only to Letterboxd over HTTPS.
+• Web history: YES — Swipe handles the current Letterboxd URL and film/profile/list URLs
+  needed for its deck, trailer, sync, and database features. It does not record or inspect
+  browsing outside the declared Letterboxd pages or send this history to the developer.
+• User activity: YES — explicit Swipe choices such as watched, like, watchlist, skip,
+  and review are used to update the local registry and, where requested, Letterboxd.
+  It does not log unrelated clicks, pointer movement, scrolling, or keystrokes.
 • Website content: YES — the extension reads your own Letterboxd profile pages
-  (film titles, ratings, liked status, review text) to build the local database.
-  This content is stored ON YOUR DEVICE only and is never transmitted to us or any
-  third party. Certify: used only for the single purpose, never sold, never transferred.
+  (film titles, ratings, liked status, URLs, and review text) to build the local database,
+  and handles review form text, tags, date, rating, and options when you submit them.
+  Synced profile content is stored ON YOUR DEVICE; submitted review data is sent directly
+  to Letterboxd only. None is transmitted to the extension developer or analytics.
+• Health / Financial / Location / Personal communications: No
 
 ────────────────────────────────────────────────────────────────────────
 IMPORTANT DISCLOSURE (also stated in the README)
@@ -84,7 +110,9 @@ IMPORTANT DISCLOSURE (also stated in the README)
   are throttled and back off on rate-limit responses.
 • Marking watched/liked/watchlist and submitting reviews WRITE to your real Letterboxd
   account using your active session. Review submission posts to a Letterboxd endpoint
-  that is not a public, documented API and may change without notice.
+  that is not a public, documented API and may change without notice. On explicit Submit,
+  the review, rating, diary date, rewatch/spoiler/like options, tags, and transient CSRF
+  token go directly to Letterboxd over HTTPS.
 • Dictation availability and audio processing depend on the browser's speech service.
   Swipe does not add a microphone extension permission or receive the audio itself.
 • This is an unofficial, independent tool, not affiliated with or endorsed by
@@ -95,9 +123,36 @@ PERMISSION JUSTIFICATIONS
 ────────────────────────────────────────────────────────────────────────
 
 storage:
+Required to store the user's device-local film registry, collection-sync metadata,
+account-link status, deck filters, and extension preferences in chrome.storage.
+This data stays in the user's browser and is not sent to the developer.
 
 unlimitedStorage:
+Required because large Letterboxd histories can contain thousands of local film
+records, including poster URLs, ratings, collection flags, watched dates, and review
+text. It prevents the normal extension storage quota from truncating a user's own
+local database. It does not grant access to arbitrary files on the device.
 
+Host permission — https://letterboxd.com/*:
+Required to detect supported Letterboxd film and listing pages, read the signed-in
+user's own collection pages during an explicit sync, open Letterboxd trailer controls,
+and perform watched, liked, or watchlist actions the user explicitly chooses. Requests
+remain limited to Letterboxd and use the user's active session.
+
+Host permission — https://api.letterboxd.com/*:
+Required only for the extension service worker to submit a review or rating the user
+explicitly confirms. The fixed request sends the review/rating/date/tags/options and a
+transient CSRF token directly to Letterboxd over HTTPS. No arbitrary URL is accepted,
+and no data is sent to the developer or a developer-operated service.
+
+LIMITED USE DISCLOSURE:
+Swipe uses the Letterboxd account, page, form, and activity data it handles only to
+provide and improve the user-facing deck, review, trailer, sync, and local-database
+features described above. It does not sell this data, use it for advertising or
+creditworthiness, transfer it for unrelated purposes, or give the developer or
+other people access to it for unrelated processing. Content that the user explicitly
+submits to Letterboxd is handled according to their Letterboxd account and privacy
+settings.
 
 
 
@@ -109,10 +164,13 @@ SUPPORT URL:         https://github.com/leathalobaidi/vypode-letterboxd/issues
 PRIVACY POLICY URL:  https://github.com/leathalobaidi/vypode-letterboxd#privacy
 
 ────────────────────────────────────────────────────────────────────────
-GRAPHICS TO UPLOAD  (all in ~/store-assets/out/, 24-bit PNG no-alpha)
+GRAPHICS TO UPLOAD  (all in repo/store-assets/, 24-bit PNG no-alpha)
 ────────────────────────────────────────────────────────────────────────
-1. Icon 128×128         — icons/icon128.png
-2. Screenshots (1280×800, ≥1) — swipe-1-deck.png  +  swipe-2-database.png
-3. Small promo (440×280)      — swipe-promo-440x280.png
-4. Marquee (1400×560)         — swipe-marquee-1400x560.png
+IMPORTANT: the checked-in screenshots predate beta.5's visible deck action bar and
+must be recaptured before a stable Web Store submission. Do not present them as
+current beta.5 screenshots.
+1. Icon 128×128         — store-assets/swipe-store-icon-128.png
+2. Screenshots (1280×800, ≥1) — store-assets/swipe-1-deck.png  +  store-assets/swipe-2-database.png
+3. Small promo (440×280)      — store-assets/swipe-promo-440x280.png
+4. Marquee (1400×560)         — store-assets/swipe-marquee-1400x560.png
 5. Promo video (optional)     — upload youtube the demo if you make one; paste the YouTube URL

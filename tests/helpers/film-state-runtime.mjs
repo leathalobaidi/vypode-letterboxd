@@ -52,17 +52,26 @@ export function createStorageArea(initial = {}) {
 
 export function createFilmStateRuntime(localInitial = {}, syncInitial = {}, sharedAreas = null) {
   const sentMessages = [];
+  const storageListeners = [];
   const localArea = sharedAreas?.local || createStorageArea(localInitial);
   const syncArea = sharedAreas?.sync || createStorageArea(syncInitial);
   const context = {
     console,
+    URL,
     setTimeout,
     clearTimeout,
     window: {},
     chrome: {
-      storage: { local: localArea, sync: syncArea },
+      storage: {
+        local: localArea,
+        sync: syncArea,
+        onChanged: { addListener(listener) { storageListeners.push(listener); } }
+      },
       runtime: {
-        sendMessage(message) { sentMessages.push(clone(message)); }
+        sendMessage(message) {
+          sentMessages.push(clone(message));
+          return sharedAreas?.sendMessage?.(clone(message));
+        }
       }
     }
   };
@@ -73,6 +82,9 @@ export function createFilmStateRuntime(localInitial = {}, syncInitial = {}, shar
     api: context.window.VypodeFilmState,
     localStore: localArea.store,
     syncStore: syncArea.store,
-    sentMessages
+    sentMessages,
+    emitStorageChange(changes, areaName = 'local') {
+      for (const listener of storageListeners) listener(changes, areaName);
+    }
   };
 }

@@ -13,7 +13,7 @@ test('csv: header plus one row per watched film, watchlist-only films excluded',
   const rt = runtimeWith({
     'parasite-2019': {
       title: 'Parasite', year: '2019', director: 'Bong Joon-ho',
-      ratingValue: 5, watched: true, watchedAt: '2026-01-15T20:00:00.000Z',
+      ratingValue: 5, watched: true, watchedAt: '2026-01-15T20:00:00.000Z', watchedDate: '2026-01-15',
       reviewText: 'Masterful.'
     },
     'dune-part-two': { title: 'Dune: Part Two', watchlist: true, watched: false }
@@ -31,7 +31,7 @@ test('csv: commas, quotes and newlines are escaped per RFC 4180', async () => {
     'love-actually': {
       title: 'Love, Actually "Director\'s Cut"', year: '2003',
       director: 'Richard Curtis', ratingValue: 3.5,
-      watched: true, watchedAt: '2025-12-25T10:00:00.000Z',
+      watched: true, watchedAt: '2025-12-25T10:00:00.000Z', watchedDate: '2025-12-25',
       reviewText: 'Line one\nLine "two", with comma'
     }
   });

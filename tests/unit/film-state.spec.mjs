@@ -48,6 +48,7 @@ function createFilmStateRuntime(localInitial = {}, syncInitial = {}, sharedAreas
   const syncArea = sharedAreas?.sync || createStorageArea(syncInitial);
   const context = {
     console,
+    URL,
     setTimeout,
     clearTimeout,
     window: {},
@@ -96,6 +97,7 @@ test('tracks metadata, ratings, reviews, filters, and search', async () => {
     reviewText: 'warm city magic',
     watched: true,
     watchedAt: new Date().toISOString(),
+    watchedDate: new Date().toISOString().slice(0, 10),
     liked: true
   }, 'collectionSync');
   api.updateFilm('unrated-watch', {
@@ -107,7 +109,8 @@ test('tracks metadata, ratings, reviews, filters, and search', async () => {
     title: 'Recent Drama',
     genres: ['Drama'],
     watched: true,
-    watchedAt: new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()
+    watchedAt: new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString(),
+    watchedDate: new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
   }, 'collectionSync');
   api.setFlag('skipped-film', 'skipped', true, 'userAction');
 
@@ -175,8 +178,9 @@ test('separate content-script registries merge storage writes instead of clobber
   tabB.api.updateFilm('moonlight', { title: 'Moonlight', liked: true }, 'userAction');
   await waitForDebounce();
 
-  assert.equal(sharedAreas.local.store.vypode_state.slugs.arrival.watched, true);
-  assert.equal(sharedAreas.local.store.vypode_state.slugs.moonlight.liked, true);
+  const slugs = sharedAreas.local.store.vypode_state.accounts.$legacy.slugs;
+  assert.equal(slugs.arrival.watched, true);
+  assert.equal(slugs.moonlight.liked, true);
 });
 
 test('imports exported data by timestamp without cloud dependencies', async () => {
@@ -190,7 +194,7 @@ test('imports exported data by timestamp without cloud dependencies', async () =
     updatedAt: '2024-01-01T00:00:00.000Z'
   }, 'collectionSync');
 
-  const result = api.importData(JSON.stringify({
+  const result = await api.importData(JSON.stringify({
     slugs: {
       moonlight: {
         title: 'Moonlight',
@@ -219,18 +223,18 @@ test('rejects unsafe import slugs and does not apply missing flag booleans', asy
   api.updateFilm('moonlight', {
     title: 'Moonlight',
     watched: true,
-    watchedAt: '2026-01-01T00:00:00.000Z',
-    updatedAt: '2026-01-01T00:00:00.000Z'
+    watchedAt: '2024-01-01T00:00:00.000Z',
+    updatedAt: '2024-01-01T00:00:00.000Z'
   }, 'collectionSync');
 
-  const result = api.importData(`{
+  const result = await api.importData(`{
     "slugs": {
       "__proto__": { "title": "Prototype", "watched": true },
       "constructor": { "title": "Constructor", "watched": true },
       "moonlight": {
         "title": "Moonlight",
-        "watchedAt": "2027-01-01T00:00:00.000Z",
-        "updatedAt": "2027-01-01T00:00:00.000Z"
+        "watchedAt": "2025-01-01T00:00:00.000Z",
+        "updatedAt": "2025-01-01T00:00:00.000Z"
       }
     }
   }`);
@@ -240,10 +244,10 @@ test('rejects unsafe import slugs and does not apply missing flag booleans', asy
   assert.equal(api.get('constructor'), null);
   assert.equal({}.watched, undefined);
   assert.equal(api.get('moonlight').watched, true);
-  assert.equal(api.get('moonlight').watchedAt, '2026-01-01T00:00:00.000Z');
+  assert.equal(api.get('moonlight').watchedAt, '2024-01-01T00:00:00.000Z');
 });
 
-test('clearAll removes local registry and synced preferences', async () => {
+test('clearAll removes local registry while preserving synced preferences', async () => {
   const { api, localStore, syncStore } = createFilmStateRuntime();
   await api.init();
 
@@ -253,12 +257,42 @@ test('clearAll removes local registry and synced preferences', async () => {
 
   assert.ok(localStore.vypode_state);
   assert.ok(syncStore.vypode_prefs);
+  localStore.vypode_user = { username: 'Alice', active: true };
+  localStore.vypode_action_outbox_v1 = { 'action:user:alice': { account: 'alice' } };
+  localStore.vypode_action_outcomes_v1 = { 'action:user:alice': { status: 'failed', at: new Date().toISOString() } };
+  localStore.vypode_review_drafts_v1 = { 'user:alice': { arrival: { reviewText: 'private draft' } } };
+  localStore.vypode_review_uncertain_v1 = { 'user:alice': { arrival: {
+    accountId: 'user:alice',
+    slug: 'arrival',
+    generation: 0,
+    requestId: 'sent-review-before-clear',
+    createdAt: '2026-01-02T00:00:00.000Z',
+    reason: 'remote result unknown',
+    status: 'uncertain',
+    fingerprint: 'review-fingerprint'
+  } } };
 
   await api.clearAll();
   await waitForDebounce();
 
-  assert.equal(localStore.vypode_state, undefined);
-  assert.equal(syncStore.vypode_prefs, undefined);
+  assert.equal(localStore.vypode_state._meta.version, 3);
+  assert.equal(localStore.vypode_state._meta.generation, 1);
+  assert.deepEqual(plain(localStore.vypode_state.accounts), {});
+  assert.deepEqual(plain(localStore.vypode_action_outbox_v1), {});
+  assert.deepEqual(plain(localStore.vypode_action_outcomes_v1), {});
+  assert.deepEqual(plain(localStore.vypode_review_drafts_v1), {});
+  const safetyMarker = localStore.vypode_review_uncertain_v1['user:alice'].arrival;
+  assert.equal(safetyMarker.generation, 1);
+  assert.equal(safetyMarker.requestId, 'sent-review-before-clear');
+  assert.equal(safetyMarker.status, 'uncertain');
+  assert.equal('reviewText' in safetyMarker, false);
+  assert.equal('csrf' in safetyMarker, false);
+  assert.deepEqual(plain(api.getLastClearResult()), { dispatchedActions: 0, dispatchedReviews: 1 });
+  assert.equal(localStore.vypode_user, null);
+  assert.doesNotMatch(JSON.stringify(localStore).toLowerCase(), /private draft/);
+  const withoutSafetyMarker = { ...localStore, vypode_review_uncertain_v1: {} };
+  assert.doesNotMatch(JSON.stringify(withoutSafetyMarker).toLowerCase(), /alice|remote result unknown/);
+  assert.equal(syncStore.vypode_prefs.excludeSkipped, false);
   assert.deepEqual(plain(api.getStats()), {
     total: 0,
     watched: 0,

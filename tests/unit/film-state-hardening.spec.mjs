@@ -47,6 +47,7 @@ function makeFilmState({ local = {}, sync = {} } = {}) {
   const context = {};
   context.window = context;                 // film-state.js sets window.VypodeFilmState
   context.console = console;
+  context.URL = URL;
   context.chrome = {
     storage: { local: localArea, sync: syncArea },
     runtime: {
@@ -84,7 +85,7 @@ test('import rejects prototype-pollution slugs and leaves Object.prototype clean
       'good-film': { title: 'Good', watched: true, watchedAt: '2024-01-01T00:00:00.000Z' }
     }
   });
-  const res = FS.importData(payload);
+  const res = await FS.importData(payload);
   assert.equal(res.success, true);
   assert.equal(({}).polluted, undefined, 'Object.prototype must not be polluted');
   assert.equal(FS.get('__proto__'), null);
@@ -125,7 +126,7 @@ test('malformed import does NOT clear existing flags when booleans are absent', 
   });
   await FS.init();
   // Imported record omits the `watched` boolean but carries a newer timestamp.
-  const res = FS.importData(JSON.stringify({
+  const res = await FS.importData(JSON.stringify({
     slugs: { arrival: { watchedAt: '2025-01-01T00:00:00.000Z', title: 'Arrival' } }
   }));
   assert.equal(res.success, true);
@@ -139,7 +140,7 @@ test('import with explicit false + newer timestamp DOES win (intentional overrid
     }) }
   });
   await FS.init();
-  FS.importData(JSON.stringify({
+  await FS.importData(JSON.stringify({
     slugs: { arrival: { watched: false, watchedAt: '2025-01-01T00:00:00.000Z' } }
   }));
   assert.equal(FS.get('arrival').watched, false);
@@ -148,8 +149,8 @@ test('import with explicit false + newer timestamp DOES win (intentional overrid
 test('invalid JSON and missing-slugs imports fail safely', async () => {
   const { FS } = makeFilmState();
   await FS.init();
-  assert.equal(FS.importData('{not json').success, false);
-  assert.equal(FS.importData(JSON.stringify({ nope: 1 })).success, false);
+  assert.equal((await FS.importData('{not json')).success, false);
+  assert.equal((await FS.importData(JSON.stringify({ nope: 1 }))).success, false);
   assert.equal(FS.getStats().total, 0);
 });
 
@@ -184,9 +185,9 @@ test('concurrent storage write is merged on flush (last-writer-wins per flag)', 
   });
   // This instance sets watchlist and flushes; writeToStorage re-reads + merges.
   FS.setFlag('arrival', 'watchlist', true, 'userAction');
-  FS.flush();
+  await FS.flush();
   await tick();
-  const saved = localArea.store.vypode_state.slugs.arrival;
+  const saved = localArea.store.vypode_state.accounts.$legacy.slugs.arrival;
   assert.equal(saved.watched, true, 'kept watched');
   assert.equal(saved.liked, true, 'merged the other tab\'s newer like');
   assert.equal(saved.watchlist, true, 'kept this tab\'s watchlist');
@@ -205,9 +206,9 @@ test('same-millisecond tie: a userAction beats a collectionSync reconcile (T8)',
   localArea.store.vypode_state = registry({
     arrival: { title: 'Arrival', watched: true, watchedAt: T, source: 'userAction', updatedAt: T }
   });
-  FS.flush();                 // writeToStorage re-reads the userAction + merges
+  await FS.flush();           // writeToStorage re-reads the userAction + merges
   await tick();
-  assert.equal(localArea.store.vypode_state.slugs.arrival.watched, true,
+  assert.equal(localArea.store.vypode_state.accounts.$legacy.slugs.arrival.watched, true,
     'the live user action must not be clobbered by a same-instant reconcile');
 });
 
@@ -222,7 +223,7 @@ test('large registry coalesces user-action writes instead of writing per action 
   // Burst of rapid user actions on a large library.
   for (let i = 0; i < 5; i++) FS.setFlag('film-' + i, 'liked', true, 'userAction');
   assert.equal(writes, 0, 'no synchronous full-registry write during the burst (debounced)');
-  FS.flush();                 // flush guarantees the coalesced write lands
+  await FS.flush();           // flush guarantees the coalesced write lands
   await tick();
   assert.ok(writes >= 1 && writes <= 2, `burst coalesced into <=2 writes, saw ${writes}`);
   // Small libraries keep writing immediately (no regression).
@@ -232,7 +233,8 @@ test('large registry coalesces user-action writes instead of writing per action 
   const sset = small.localArea.set;
   small.localArea.set = (items, cb) => { smallWrites++; sset(items, cb); };
   small.FS.setFlag('arrival', 'watched', true, 'userAction');
-  assert.ok(smallWrites >= 1, 'small library still writes immediately');
+  await small.FS.flush();
+  assert.ok(smallWrites >= 1, 'small library writes when its returned flush promise settles');
 });
 
 // ───────────────────────────── reconcileFlags safety ───────────────────────
@@ -257,13 +259,13 @@ test('reconcileFlags only clears collectionSync-sourced flags, never user action
 function sampleLibrary() {
   return registry({
     a: { title: 'Amadeus', year: '1984', genres: ['Drama'], watched: true, ratingValue: 4,
-         reviewText: 'mozart', watchedAt: '2026-05-01T00:00:00.000Z', updatedAt: '2026-05-01T00:00:00.000Z' },
+         reviewText: 'mozart', watchedAt: '2026-05-01T00:00:00.000Z', watchedDate: '2026-05-01', updatedAt: '2026-05-01T00:00:00.000Z' },
     b: { title: 'Brazil', year: '1985', genres: ['Science Fiction', 'Comedy'], watched: true, ratingValue: 5,
-         watchedAt: '2024-02-01T00:00:00.000Z', updatedAt: '2024-02-01T00:00:00.000Z' },
+         watchedAt: '2024-02-01T00:00:00.000Z', watchedDate: '2024-02-01', updatedAt: '2024-02-01T00:00:00.000Z' },
     c: { title: 'Caché', year: '2005', genres: ['Thriller'], watched: true, liked: true,
          watchedAt: null, updatedAt: '2025-01-01T00:00:00.000Z' },   // missing watched date
     d: { title: '東京物語', year: '1953', genres: ['Drama'], watched: true, ratingValue: 5,
-         reviewText: 'unicode tokyo story', watchedAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z' },
+         reviewText: 'unicode tokyo story', watchedAt: '2026-01-01T00:00:00.000Z', watchedDate: '2026-01-01', updatedAt: '2026-01-01T00:00:00.000Z' },
     e: { title: 'Eraserhead', genres: ['Horror'], watchlist: true, updatedAt: '2023-01-01T00:00:00.000Z' },
     f: { title: 'Funny Games', skipped: true, updatedAt: '2022-01-01T00:00:00.000Z' }
   });

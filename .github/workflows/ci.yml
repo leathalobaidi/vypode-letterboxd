@@ -1,0 +1,56 @@
+name: Check, test, and package
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Use Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install exact dependencies
+        run: npm ci
+
+      - name: Check JavaScript and manifest syntax
+        run: npm run check
+
+      - name: Run automated tests
+        run: npm test
+
+      - name: Build release archive and checksum
+        run: npm run package
+
+      - name: Verify reproducible archive
+        shell: bash
+        run: |
+          first_checksum=$(cut -d ' ' -f 1 dist/*.sha256)
+          npm run package
+          second_checksum=$(cut -d ' ' -f 1 dist/*.sha256)
+          test "$first_checksum" = "$second_checksum"
+
+      - name: Upload validated extension package
+        uses: actions/upload-artifact@v4
+        with:
+          name: swipe-for-letterboxd-${{ github.sha }}
+          path: |
+            dist/*.zip
+            dist/*.sha256
+          if-no-files-found: error

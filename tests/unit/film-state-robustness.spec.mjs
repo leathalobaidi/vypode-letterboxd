@@ -30,7 +30,7 @@ test('loads malformed/partial stored entries without throwing and backfills shap
 test('migrates a legacy v0 blob up to the current data version on load', async () => {
   const { api } = createFilmStateRuntime(asStoragePayload(smallHistory(3), 0));
   await api.init();
-  assert.equal(api.getMeta().version, 2);
+  assert.equal(api.getMeta().version, 3);
   assert.equal(api.getStats().total, 3);
 });
 
@@ -55,8 +55,10 @@ test('handles films missing ratings, reviews, and watch dates', async () => {
   // 'missing-rating' = watched but unrated
   const missingRating = api.query({ filter: 'missing-rating' }).map(r => r.slug).sort();
   assert.deepEqual(plain(missingRating), ['bare-watch', 'no-rating']);
-  // 'missing-watched-date' = watched with no date
-  assert.deepEqual(plain(api.query({ dateFilter: 'missing-watched-date' }).map(r => r.slug)), ['no-watch-date']);
+  // v3 only reports an actual diary date when watchedDate is explicitly known;
+  // legacy watchedAt timestamps must not be treated as a fabricated date.
+  assert.deepEqual(plain(api.query({ dateFilter: 'missing-watched-date' }).map(r => r.slug).sort()),
+    ['bare-watch', 'no-rating', 'no-review', 'no-watch-date']);
   // reviewed filter excludes the no-review record
   assert.equal(api.query({ filter: 'reviewed' }).some(r => r.slug === 'no-review'), false);
 });
@@ -149,13 +151,42 @@ test('imports an empty history and a bulk history without cloud dependencies', a
   const { api } = createFilmStateRuntime();
   await api.init();
 
-  const emptyResult = api.importData(asExportJson(emptyHistory()));
+  const emptyResult = await api.importData(asExportJson(emptyHistory()));
   assert.equal(emptyResult.success, true);
   assert.equal(api.getStats().total, 0);
 
-  const bulkResult = api.importData(asExportJson(smallHistory(50)));
+  const bulkResult = await api.importData(asExportJson(smallHistory(50)));
   assert.equal(bulkResult.success, true);
   assert.equal(api.getStats().total, 50);
+});
+
+test('a 5,000-film first-party export round-trips through the supported import path', async () => {
+  const history = hugeHistory(5000);
+  for (let index = 1; index <= 5000; index += 1) {
+    history[`film-${index}`].poster = `https://a.ltrbxd.com/resized/film-poster/${index}.jpg`;
+  }
+  history['film-2500'].reviewText = null;
+  history['film-2500'].reviewUrl = null;
+  history['film-2500'].rating = null;
+  history['film-2500'].ratingValue = null;
+
+  const source = createFilmStateRuntime(asStoragePayload(history));
+  await source.api.init();
+  const backup = source.api.exportData();
+  assert.ok(Buffer.byteLength(backup, 'utf8') > 1_000_000, 'fixture should exercise a genuinely large backup');
+
+  const restored = createFilmStateRuntime();
+  await restored.api.init();
+  const result = await restored.api.importData(backup);
+
+  assert.equal(result.success, true);
+  assert.equal(result.merged > 0, true);
+  assert.equal(restored.api.getStats().total, 5000);
+  assert.equal(restored.api.get('film-1').title, 'Film 1');
+  assert.equal(restored.api.get('film-5000').title, 'Film 5000');
+  assert.equal(restored.api.get('film-1').poster, 'https://a.ltrbxd.com/resized/film-poster/1.jpg');
+  assert.equal(restored.api.get('film-2500').reviewText, null);
+  assert.equal(restored.api.get('film-2500').ratingValue, null);
 });
 
 // ── Scale: a 10,000-film history ────────────────────────────────────────

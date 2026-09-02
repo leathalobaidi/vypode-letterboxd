@@ -60,6 +60,8 @@ function trailerPage({ playerSrc = '//www.youtube.com/embed/TvRCQM2HrXs?rel=0&wm
     <input id="search-input">
     <textarea id="review-input"></textarea>
     <div id="editable" contenteditable="true">Editable</div>
+    <button id="unrelated-button" type="button">Unrelated action</button>
+    <a id="unrelated-link" href="/films/">Browse films</a>
   </body></html>`;
 }
 
@@ -147,6 +149,12 @@ test('K cold-starts the exact Letterboxd YouTube trailer without touching other 
     src: unrelated.getAttribute('src'),
     allow: unrelated.getAttribute('allow')
   };
+  const control = document.querySelector('#vypodeTrailerPlaybackControl');
+  assert.ok(control, 'the exact trailer route should have a persistent playback control');
+  assert.equal(control.disabled, false);
+  assert.equal(control.dataset.playbackState, 'idle');
+  assert.equal(control.getAttribute('aria-pressed'), 'false');
+  assert.equal(control.textContent, 'Play trailer');
   let sourceClicks = 0;
   sourceLink.addEventListener('click', event => {
     event.preventDefault();
@@ -169,6 +177,10 @@ test('K cold-starts the exact Letterboxd YouTube trailer without touching other 
   assertConfiguredYouTubePlayer(player);
   assert.equal(JSON.parse(playerMessages.at(-1).message).func, 'playVideo');
   assert.equal(playerMessages.at(-1).targetOrigin, 'https://www.youtube.com');
+  assert.equal(control.dataset.playbackState, 'play-requested');
+  assert.equal(control.getAttribute('aria-pressed'), 'true');
+  assert.equal(control.textContent, 'Play requested');
+  assert.match(control.getAttribute('aria-label'), /Pause trailer; play requested/i);
   assert.deepEqual(
     { src: unrelated.getAttribute('src'), allow: unrelated.getAttribute('allow') },
     unrelatedBefore,
@@ -206,7 +218,11 @@ test('K opens a not-yet-created Letterboxd trailer and waits for its YouTube ifr
   assert.equal(sourceClicks, 1, 'rapid K presses must activate the genuine Letterboxd source only once');
   assert.ok(player, 'the asynchronously-created colorbox iframe should be found');
   assertConfiguredYouTubePlayer(player);
-  assert.equal(player.dataset.vypodePlaybackRequested, 'paused');
+  assert.equal(player.dataset.vypodePlaybackRequested, 'pause-requested');
+  const control = document.querySelector('#vypodeTrailerPlaybackControl');
+  assert.equal(control.dataset.playbackState, 'pause-requested');
+  assert.equal(control.getAttribute('aria-pressed'), 'false');
+  assert.equal(control.textContent, 'Pause requested');
   const playerMessages = [];
   Object.defineProperty(player, 'contentWindow', {
     configurable: true,
@@ -302,6 +318,59 @@ test('rapid K then K and Space preserve the latest playback intent without reope
     'the load callback must honor the rapid second K instead of restoring play'
   );
   assert.ok(playerMessages.every(({ targetOrigin }) => targetOrigin === 'https://www.youtube.com'));
+  assert.equal(document.querySelector('#vypodeTrailerPlaybackControl').dataset.playbackState, 'play-requested');
+});
+
+test('the persistent trailer control cold-starts and toggles requested state without claiming playback', async () => {
+  const { window } = await runContent(trailerPage());
+  const document = window.document;
+  const control = document.querySelector('#vypodeTrailerPlaybackControl');
+  const player = document.querySelector('#cboxLoadedContent iframe.cboxIframe');
+  const messages = [];
+  Object.defineProperty(player, 'contentWindow', {
+    configurable: true,
+    value: {
+      postMessage(message, targetOrigin) { messages.push({ message, targetOrigin }); }
+    }
+  });
+
+  control.click();
+  player.dispatchEvent(new window.Event('load'));
+  assert.equal(control.textContent, 'Play requested');
+  assert.equal(control.getAttribute('aria-pressed'), 'true');
+  assert.equal(control.dataset.playbackState, 'play-requested');
+
+  control.click();
+  assert.equal(control.textContent, 'Pause requested');
+  assert.equal(control.getAttribute('aria-pressed'), 'false');
+  assert.equal(control.dataset.playbackState, 'pause-requested');
+  assert.deepEqual(
+    messages.map(({ message }) => JSON.parse(message).func),
+    ['playVideo', 'pauseVideo']
+  );
+  assert.ok(messages.every(({ targetOrigin }) => targetOrigin === 'https://www.youtube.com'));
+  assert.doesNotMatch(contentSource, /Trailer playing|Trailer paused/);
+
+  await tick(45);
+  assert.equal(control.isConnected, true, 'the page control must not expire like the old shortcut hint');
+});
+
+test('post-activation Space never hijacks unrelated interactive controls', async () => {
+  const { window } = await runContent(trailerPage());
+  keydown(window, 'k');
+  const document = window.document;
+  for (const selector of ['#unrelated-button', '#unrelated-link', '#search-input', '#review-input', '#editable']) {
+    const target = document.querySelector(selector);
+    if (selector === '#editable') {
+      Object.defineProperty(target, 'isContentEditable', { configurable: true, value: true });
+    }
+    Object.defineProperty(document, 'activeElement', {
+      configurable: true,
+      get: () => target
+    });
+    const event = keydown(window, ' ', { code: 'Space', target });
+    assert.equal(event.defaultPrevented, false, `Space should remain native on ${selector}`);
+  }
 });
 
 test('modified, repeated, and typing K presses are never hijacked', async () => {
@@ -351,12 +420,18 @@ test('K is ignored off the exact trailer route and when no valid Letterboxd play
     assert.equal(event.defaultPrevented, false);
     assert.equal(player.getAttribute('src'), initialSrc);
     assert.equal(player.getAttribute('allow'), null);
+    assert.equal(window.document.querySelector('#vypodeTrailerPlaybackControl'), null);
   });
 
   await t.test('missing overlay and source', async () => {
     const emptyPage = trailerPage({ includePlayer: false })
       .replace(/<p class="trailer-link[\s\S]*?<\/p>/, '');
     const { window } = await runContent(emptyPage);
+    const control = window.document.querySelector('#vypodeTrailerPlaybackControl');
+    assert.ok(control, 'the exact route keeps an explicit unavailable control visible');
+    assert.equal(control.disabled, true);
+    assert.equal(control.dataset.playbackState, 'unavailable');
+    assert.equal(control.getAttribute('aria-pressed'), 'false');
     const event = keydown(window);
     await tick(35);
     assert.equal(event.defaultPrevented, false);

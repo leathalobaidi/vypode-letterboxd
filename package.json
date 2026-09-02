@@ -8,7 +8,9 @@
     "test": "npm run test:self",
     "test:unit": "npm run check && node --test tests/unit/*.spec.mjs",
     "test:e2e": "node --test tests/e2e/*.spec.mjs",
-    "test:self": "npm run test:unit && npm run test:e2e"
+    "test:self": "npm run test:unit && npm run test:e2e",
+    "package": "sh scripts/package-extension.sh",
+    "release:check": "npm run check && npm test && npm run package"
   },
   "devDependencies": {
     "linkedom": "^0.18.12"

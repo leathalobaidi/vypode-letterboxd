@@ -47,7 +47,7 @@ function reactPoster(slug, name, { hydrated = false } = {}) {
     <div class="react-component griditem" data-component-class="LazyPoster"
          data-item-slug="${slug}" data-item-name="${name}"
          data-item-link="/film/${slug}/">
-      ${hydrated ? `<div class="poster"><img alt="${name}" src="https://img.test/${slug}.jpg"></div>` : ''}
+      ${hydrated ? `<div class="poster"><img alt="${name}" src="https://a.ltrbxd.com/resized/${slug}.jpg"></div>` : ''}
     </div>
   `;
 }
@@ -118,7 +118,7 @@ test('hydrated React components contribute poster URLs and years', async () => {
   window.document.querySelector('.vypode-toggle-btn').click();
   await tick(20);
   const img = window.document.querySelector('#vypodeCard .vypode-card-bg');
-  assert.match(img.getAttribute('src'), /img\.test\/arrival-2016\.jpg/);
+  assert.match(img.getAttribute('src'), /a\.ltrbxd\.com\/resized\/arrival-2016\.jpg/);
 });
 
 test('mixed React + classic markup dedupes by slug', async () => {
