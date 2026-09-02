@@ -22,6 +22,8 @@ Use this checklist with the installed `code-review` skill. It supplements the re
 - Isolate film state, review drafts, and pending actions by the active Letterboxd account.
 - Clearing local film data must remove the documented local data while retaining only explicitly documented duplicate-prevention records.
 - Empty legacy state may be reclaimed after a clear; state belonging to a different active account must never be replaced implicitly.
+- Make a verified legacy-state claim inside the serialized worker, bound to the editor's captured generation, without retrying after a conflict or falling back to a direct storage write.
+- Treat `vypode_user` as a session-status cache for display. It must not choose the authoritative FilmState account or undo a newer account switch.
 - Every tab must adopt a newer clear generation and its authoritative active account. Ordinary merge and clear-skipped commands must never change root ownership.
 - Preserve generation/account fences across asynchronous work so a clear or account switch cannot resurrect stale results.
 - Ensure queued account actions are idempotent or protected against blind replay, including service-worker suspension and retry paths.

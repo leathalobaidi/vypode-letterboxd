@@ -695,6 +695,48 @@ test('a stale tab cannot reclaim cleared state or submit through a different cur
   assert.match(window.document.body.textContent, /account changed|different Letterboxd account|refresh/i);
 });
 
+test('a verified review cannot replace a different account that wins the legacy claim race', async () => {
+  const { window, chrome, fetchCalls } = await runContent(
+    singleFilmPage('BusyBees1'),
+    'https://letterboxd.com/film/world-war-z/',
+    {
+      runtimeSendMessage(message) {
+        if (message?.type === 'vypode-state' && message.action === 'claimVerifiedAccount') {
+          return Promise.resolve({
+            ok: false,
+            stale: true,
+            conflict: true,
+            code: 'active-account-changed',
+            generation: message.data.generation,
+            activeAccount: 'user:bob',
+            account: { _meta: { version: 3 }, slugs: {} }
+          });
+        }
+        return undefined;
+      }
+    }
+  );
+
+  click(window.document, '.vypode-toggle-btn');
+  click(window.document, '#vypodeOpenSettings');
+  click(window.document, '#vypodeClearAll');
+  await tick(30);
+  click(window.document, '#vypodeSettingsClose');
+  click(window.document, '#vypodeOpenReview');
+  await tick(15);
+  setControl(window, '#vypodeReviewText', 'This draft must stay with BusyBees1');
+  click(window.document, '#vypodeReviewSubmit');
+  await tick(100);
+
+  assert.equal(fetchCalls.some(call => call.source === 'worker'), false);
+  assert.equal(window.VypodeFilmState.getAccountId(), 'user:bob');
+  assert.equal(
+    chrome.storage.local.store.vypode_review_drafts_v1?.['user:busybees1']?.['world-war-z']?.reviewText,
+    'This draft must stay with BusyBees1'
+  );
+  assert.match(window.document.body.textContent, /account changed|refresh/i);
+});
+
 test('an account switch between film data and fresh identity verification blocks the review POST', async () => {
   const today = new Date();
   const watchedDate = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
@@ -772,6 +814,52 @@ test('failed fresh identity verification deactivates the popup session and keeps
   assert.equal(
     chrome.storage.local.store.vypode_review_drafts_v1?.['user:busybees1']?.['world-war-z']?.reviewText,
     'Keep this account-bound draft'
+  );
+});
+
+test('a fresh identity transport failure deactivates the cached popup session and keeps the draft', async () => {
+  const jsonResponse = {
+    ok: true,
+    status: 200,
+    headers: { get: () => null },
+    text: async () => JSON.stringify({ csrf: 'session-token', lid: 'film-lid' })
+  };
+  const { window, chrome, fetchCalls } = await runContent(
+    singleFilmPage(),
+    'https://letterboxd.com/film/world-war-z/',
+    {
+      contentFetch: async requestUrl => {
+        const pathname = new NativeURL(requestUrl).pathname;
+        if (pathname.endsWith('/json/')) return jsonResponse;
+        if (pathname === '/film/world-war-z/') throw new Error('verification transport failed');
+        return undefined;
+      },
+      local: {
+        vypode_user: { username: 'BusyBees1', active: true },
+        vypode_state: {
+          _meta: { version: 3, generation: 0, activeAccount: 'user:busybees1' },
+          accounts: {
+            'user:busybees1': { _meta: { version: 3 }, slugs: {} }
+          }
+        }
+      }
+    }
+  );
+
+  click(window.document, '.vypode-toggle-btn');
+  click(window.document, '#vypodeOpenReview');
+  await tick(15);
+  setControl(window, '#vypodeReviewText', 'Keep this transport-failure draft');
+  click(window.document, '#vypodeReviewSubmit');
+  await tick(100);
+
+  assert.equal(fetchCalls.some(call => call.source === 'worker'), false,
+    'the production-log POST must not run when fresh verification is unavailable');
+  assert.equal(chrome.storage.local.store.vypode_user?.active, false,
+    'a failed fresh verification must invalidate the cached popup session');
+  assert.equal(
+    chrome.storage.local.store.vypode_review_drafts_v1?.['user:busybees1']?.['world-war-z']?.reviewText,
+    'Keep this transport-failure draft'
   );
 });
 

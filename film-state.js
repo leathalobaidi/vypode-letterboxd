@@ -467,8 +467,21 @@
       storageGet(chrome.storage.sync, [PREFS_KEY], 'sync.get during init')
     ]);
 
-    const requested = normalizeAccountId(accountHint) || normalizeAccountId(localResult[USER_KEY]);
-    const { root, migrated } = normalizeRoot(localResult[STORAGE_KEY], requested);
+    const rawState = localResult[STORAGE_KEY];
+    const cachedUser = localResult[USER_KEY];
+    const cachedActiveAccount = isRecord(cachedUser) && cachedUser.active === true
+      ? normalizeAccountId(cachedUser)
+      : null;
+    // Older unscoped v2 data used the cached username as its one-time owner,
+    // even when the last page had marked that cache inactive. Preserve that
+    // migration rule without letting an inactive cache reclaim a cleared v3 root.
+    const rawStateVersion = Number(rawState?._meta?.version);
+    const legacyMigrationAccount = isRecord(rawState) && isRecord(rawState.slugs) &&
+      (!Number.isFinite(rawStateVersion) || rawStateVersion < DATA_VERSION)
+      ? normalizeAccountId(cachedUser)
+      : null;
+    const requested = normalizeAccountId(accountHint) || cachedActiveAccount || legacyMigrationAccount;
+    const { root, migrated } = normalizeRoot(rawState, requested);
     accountId = requested || normalizeAccountId(root._meta.activeAccount) || LEGACY_ACCOUNT;
     rootGeneration = root._meta.generation;
     const activeAccount = ensureAccount(root, accountId);
@@ -477,10 +490,33 @@
 
     prefs = normalizePrefs(syncResult[PREFS_KEY]);
 
-    if (migrated || root._meta.activeAccount !== accountId) {
+    if (migrated) {
       root._meta.activeAccount = accountId;
       root._meta.updatedAt = new Date().toISOString();
       await storageSet(chrome.storage.local, { [STORAGE_KEY]: root }, 'v3 migration');
+    } else if (root._meta.activeAccount !== accountId) {
+      // Valid v3 ownership changes go through the service worker so they are
+      // ordered with clears, verified review claims, and writes from other tabs.
+      const remote = await sendStateCommand('activateAccount', {
+        accountId,
+        generation: root._meta.generation
+      });
+      if (remote?.error) throw new Error(remote.error);
+      if (remote?.ok || remote?.stale) {
+        const authoritativeAccountId = remote.ok
+          ? accountId
+          : (normalizeAccountId(remote.activeAccount) || LEGACY_ACCOUNT);
+        accountId = authoritativeAccountId;
+        rootGeneration = remote.generation;
+        const authoritative = normalizeAccount(remote.account, authoritativeAccountId);
+        registry = authoritative.slugs;
+        meta = authoritative._meta;
+      } else {
+        // Callback-only legacy/test hosts cannot use the MV3 Promise bridge.
+        root._meta.activeAccount = accountId;
+        root._meta.updatedAt = new Date().toISOString();
+        await storageSet(chrome.storage.local, { [STORAGE_KEY]: root }, 'account activation during init');
+      }
     }
     loaded = true;
   }
@@ -839,12 +875,11 @@
       }
       notifySubscribers(accountChanged ? 'account-changed' : 'state-changed');
     }
-    const nextAccount = normalizeAccountId(changes[USER_KEY]?.newValue);
-    if (nextAccount && nextAccount !== accountId) {
-      VypodeFilmState.switchAccount(nextAccount)
-        .then(() => notifySubscribers('account-changed'))
-        .catch(error => { lastStorageError = `account switch: ${error.message}`; });
-    }
+    // USER_KEY is only a cached session observation for the popup. Ownership
+    // changes are driven by this tab's verified initialization/review flow and
+    // then propagated to every tab through the serialized STATE_KEY update.
+    // Treating a delayed USER_KEY write as an activation could undo a newer
+    // account switch even when that cached session had already gone inactive.
   }
 
   // ── Migration ───────────────────────────────────────────────────────
@@ -1024,6 +1059,54 @@
         meta = next._meta;
       }
       notifySubscribers('account-changed');
+    },
+
+    async claimVerifiedAccount(nextAccount, expectedGeneration) {
+      const normalized = normalizeAccountId(nextAccount);
+      if (!normalized || normalized === LEGACY_ACCOUNT) {
+        throw new Error('Invalid verified Letterboxd account identifier');
+      }
+      if (!loaded) throw new Error('Film state is not ready');
+      if (!Number.isSafeInteger(expectedGeneration) || expectedGeneration < 0) {
+        throw new Error('Verified account claim has no valid data generation');
+      }
+      if (accountId !== LEGACY_ACCOUNT && accountId !== normalized) return false;
+
+      // This command deliberately has no direct-storage fallback and no retry.
+      // The worker compares the editor's captured generation and reset owner at
+      // dequeue time, making a concurrent clear or different account terminal.
+      const remote = await sendStateCommand('claimVerifiedAccount', {
+        accountId: normalized,
+        generation: expectedGeneration
+      });
+      if (!remote) throw new Error('Verified account claim service is unavailable');
+      if (remote.error) throw new Error(remote.error);
+      if (remote.ok) {
+        const authoritativeAccountId = normalizeAccountId(remote.activeAccount) || normalized;
+        if (authoritativeAccountId !== normalized) {
+          throw new Error('Verified account claim returned the wrong account');
+        }
+        accountId = normalized;
+        rootGeneration = remote.generation;
+        const next = normalizeAccount(remote.account, normalized);
+        registry = next.slugs;
+        meta = next._meta;
+        notifySubscribers('account-changed');
+        return true;
+      }
+      if (remote.stale || remote.conflict) {
+        const authoritativeAccountId = normalizeAccountId(remote.activeAccount) || LEGACY_ACCOUNT;
+        accountId = authoritativeAccountId;
+        rootGeneration = remote.generation;
+        const authoritative = normalizeAccount(remote.account, authoritativeAccountId);
+        registry = authoritative.slugs;
+        meta = authoritative._meta;
+        notifySubscribers(remote.code === 'generation-changed'
+          ? 'stale-account-claim-rejected'
+          : 'account-claim-rejected');
+        return false;
+      }
+      throw new Error('Verified account claim was rejected');
     },
 
     async listAccounts() {

@@ -13,14 +13,16 @@ A Chrome extension that adds a swipe-style interface and a local profile databas
 - **Clear All recovery is safer** — clearing local film data also forgets the
   current tab's cached account. A verified review can relink the same account
   immediately, including when Chrome retained an empty legacy account shell.
-  Other open tabs adopt the cleared state, and stale background saves cannot
-  reclaim or repopulate it.
+  The service worker makes that relink an atomic claim: another account or a
+  newer clear always wins without a retry. Other open tabs adopt the cleared
+  state, and stale background saves cannot reclaim or repopulate it.
 - **Account actions stay fenced** — Watched, Like, and Watchlist remain blocked
   while cleared state is unclaimed. The final identity check now follows the
   film-data request, closing the account-switch window before review delivery.
 - **Popup recovers without a reload** — after that verified relink, the toolbar
   popup recognises the active session and enables Sync again. A failed or
-  mismatched verification marks the cached session inactive.
+  mismatched verification marks the cached session inactive, while session-cache
+  updates can no longer replace the account owned by the main state registry.
 - **Reviewed with pinned Matt Pocock skills** — the repository now contains a
   pinned, auditable set of review, diagnosis, TDD, and design skills plus a
   project-specific security and release checklist. These development files are

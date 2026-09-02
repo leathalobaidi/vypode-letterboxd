@@ -730,7 +730,23 @@ test('restoring the only eligible skipped film repopulates an empty deck immedia
 });
 
 test('signed-out pages keep sync and review submission disabled', async () => {
-  const { window } = await runContent(singleFilmPage({ signedIn: false }), 'https://letterboxd.com/film/arrival/');
+  const { window, chrome } = await runContent(
+    singleFilmPage({ signedIn: false }),
+    'https://letterboxd.com/film/arrival/',
+    {
+      local: {
+        vypode_user: { username: 'BusyBees1', active: true },
+        vypode_state: {
+          _meta: { version: 3, generation: 4, activeAccount: '$legacy' },
+          accounts: {}
+        }
+      }
+    }
+  );
+
+  assert.equal(chrome.storage.local.store.vypode_user.active, false);
+  assert.equal(window.VypodeFilmState.getAccountId(), '$legacy');
+  assert.equal(chrome.storage.local.store.vypode_state._meta.activeAccount, '$legacy');
 
   click(window.document, '.vypode-toggle-btn');
   await tick();

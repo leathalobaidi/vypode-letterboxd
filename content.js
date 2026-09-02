@@ -611,13 +611,15 @@
     if (activeUsername && session.active) {
       letterboxdUsername = activeUsername;
       isLetterboxdSessionActive = true;
-      chrome.storage.local.set({
-        vypode_user: {
-          username: letterboxdUsername,
-          detectedAt: new Date().toISOString(),
-          active: true
-        }
-      });
+      try {
+        await writeLocalStorage({
+          vypode_user: {
+            username: letterboxdUsername,
+            detectedAt: new Date().toISOString(),
+            active: true
+          }
+        });
+      } catch {}
     } else {
       isLetterboxdSessionActive = false;
       const result = await new Promise(resolve => {
@@ -625,13 +627,15 @@
       });
       if (result.vypode_user?.username) {
         letterboxdUsername = result.vypode_user.username;
-        chrome.storage.local.set({
-          vypode_user: {
-            ...result.vypode_user,
-            active: false,
-            lastCheckedAt: new Date().toISOString()
-          }
-        });
+        try {
+          await writeLocalStorage({
+            vypode_user: {
+              ...result.vypode_user,
+              active: false,
+              lastCheckedAt: new Date().toISOString()
+            }
+          });
+        } catch {}
       }
     }
   }
@@ -2538,6 +2542,25 @@
     }
   }
 
+  async function markReviewSessionInactive(username) {
+    isLetterboxdSessionActive = false;
+    const safeUsername = typeof username === 'string' && /^[a-z0-9_]{1,64}$/i.test(username)
+      ? username
+      : null;
+    if (!safeUsername) return;
+    const checkedAt = new Date().toISOString();
+    try {
+      await writeLocalStorage({
+        vypode_user: {
+          username: safeUsername,
+          detectedAt: checkedAt,
+          lastCheckedAt: checkedAt,
+          active: false
+        }
+      });
+    } catch {}
+  }
+
   async function verifyFreshReviewAccount(binding, canonicalFilmUrl) {
     const expectedAccountId = binding?.accountId;
     const expectedUsername = typeof expectedAccountId === 'string' && expectedAccountId.startsWith('user:')
@@ -2547,23 +2570,18 @@
       throw new Error('Review has no valid Letterboxd account');
     }
 
-    const session = await fetchFreshReviewSession(canonicalFilmUrl);
+    let session;
+    try {
+      session = await fetchFreshReviewSession(canonicalFilmUrl);
+    } catch (error) {
+      await markReviewSessionInactive(expectedUsername);
+      throw error;
+    }
     if (!session.active || session.username?.toLowerCase() !== expectedUsername.toLowerCase()) {
-      isLetterboxdSessionActive = false;
       const observedUsername = typeof session.username === 'string' && /^[a-z0-9_]{1,64}$/i.test(session.username)
         ? session.username
         : expectedUsername;
-      const checkedAt = new Date().toISOString();
-      try {
-        await writeLocalStorage({
-          vypode_user: {
-            username: observedUsername,
-            detectedAt: checkedAt,
-            lastCheckedAt: checkedAt,
-            active: false
-          }
-        });
-      } catch {}
+      await markReviewSessionInactive(observedUsername);
       throw new Error(session.active
         ? `A fresh Letterboxd page is signed in as ${session.username}, not ${expectedUsername}. Refresh this tab before submitting.`
         : 'A fresh Letterboxd page could not confirm a signed-in account. Refresh this tab before submitting.');
@@ -2574,10 +2592,13 @@
       if (stateAccountId && stateAccountId !== '$legacy') {
         throw new Error('The active Swipe account changed. Refresh this tab before submitting.');
       }
-      if (typeof window.VypodeFilmState?.switchAccount !== 'function') {
+      if (typeof window.VypodeFilmState?.claimVerifiedAccount !== 'function') {
         throw new Error('Swipe could not reactivate the verified Letterboxd account');
       }
-      await window.VypodeFilmState.switchAccount(expectedAccountId);
+      const claimed = await window.VypodeFilmState.claimVerifiedAccount(expectedAccountId, binding?.generation);
+      if (!claimed) {
+        throw new Error('The active Swipe account changed. Refresh this tab before submitting.');
+      }
     }
 
     letterboxdUsername = session.username;
@@ -6657,7 +6678,7 @@
     // ignore the optional argument.
     await initAccount();
     if (window.VypodeFilmState) {
-      await window.VypodeFilmState.init(letterboxdUsername || null);
+      await window.VypodeFilmState.init(isLetterboxdSessionActive ? letterboxdUsername : null);
       window.VypodeFilmState.subscribe?.(snapshot => {
         const snapshotGeneration = Number(snapshot?.meta?.rootGeneration);
         const queuedItems = [...actionQueue, activeQueueItem].filter(Boolean);

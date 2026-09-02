@@ -155,6 +155,14 @@ function activate(accountId = 'user:alice', generation = 0) {
   return { type: 'vypode-state', action: 'activateAccount', data: { accountId, generation } };
 }
 
+function claimVerifiedAccount(accountId = 'user:alice', generation = 0) {
+  return {
+    type: 'vypode-state',
+    action: 'claimVerifiedAccount',
+    data: { accountId, generation }
+  };
+}
+
 test('two callers are serialized: account merges and interleaved outbox commands retain both records', async () => {
   const local = sharedLocal();
   const background = loadBackground(local);
@@ -192,6 +200,99 @@ test('a stale account merge cannot reclaim a root cleared by another tab', async
   assert.equal(result.ok, false);
   assert.equal(result.stale, true);
   assert.equal(result.activeAccount, '$legacy');
+  assert.equal(local.store.vypode_state._meta.activeAccount, '$legacy');
+  assert.equal(local.store.vypode_state.accounts['user:alice'], undefined);
+});
+
+test('a freshly verified review account can atomically claim legacy ownership', async () => {
+  const local = sharedLocal({
+    vypode_state: {
+      _meta: { version: 3, generation: 4, activeAccount: '$legacy' },
+      accounts: {}
+    }
+  });
+  const background = loadBackground(local);
+
+  const result = await background.request(claimVerifiedAccount('user:alice', 4));
+
+  assert.equal(result.ok, true);
+  assert.equal(result.claimed, true);
+  assert.equal(local.store.vypode_state._meta.activeAccount, 'user:alice');
+
+  const repeated = await background.request(claimVerifiedAccount('user:alice', 4));
+  assert.equal(repeated.ok, true, 'the same verified account should be idempotent');
+  assert.equal(repeated.claimed, false);
+});
+
+test('a freshly verified review account can atomically claim absent state', async () => {
+  const local = sharedLocal();
+  const background = loadBackground(local);
+
+  const result = await background.request(claimVerifiedAccount('user:alice', 0));
+
+  assert.equal(result.ok, true);
+  assert.equal(result.claimed, true);
+  assert.equal(local.store.vypode_state._meta.activeAccount, 'user:alice');
+  assert.ok(local.store.vypode_state.accounts['user:alice']);
+});
+
+test('a verified legacy claim cannot replace an account activated before worker serialization', async () => {
+  const local = sharedLocal({
+    vypode_state: {
+      _meta: { version: 3, generation: 4, activeAccount: '$legacy' },
+      accounts: {}
+    }
+  });
+  const background = loadBackground(local);
+  const winner = await background.request(activate('user:bob', 4));
+  assert.equal(winner.ok, true);
+  assert.equal(local.store.vypode_state._meta.activeAccount, 'user:bob');
+
+  const result = await background.request(claimVerifiedAccount('user:alice', 4));
+
+  assert.equal(result.ok, false);
+  assert.equal(result.stale, true);
+  assert.equal(result.code, 'active-account-changed');
+  assert.equal(result.activeAccount, 'user:bob');
+  assert.equal(local.store.vypode_state._meta.activeAccount, 'user:bob');
+  assert.equal(local.store.vypode_state.accounts['user:alice'], undefined);
+});
+
+test('simultaneous verified claims allow exactly one different account to win', async () => {
+  const local = sharedLocal({
+    vypode_state: {
+      _meta: { version: 3, generation: 4, activeAccount: '$legacy' },
+      accounts: {}
+    }
+  });
+  const background = loadBackground(local);
+
+  const results = await Promise.all([
+    background.request(claimVerifiedAccount('user:alice', 4)),
+    background.request(claimVerifiedAccount('user:bob', 4))
+  ]);
+
+  const winners = results.filter(result => result.ok);
+  const conflicts = results.filter(result => result.code === 'active-account-changed');
+  assert.equal(winners.length, 1);
+  assert.equal(conflicts.length, 1);
+  assert.equal(local.store.vypode_state._meta.activeAccount, winners[0].activeAccount);
+});
+
+test('a verified claim never retries across a newer clear generation', async () => {
+  const local = sharedLocal({
+    vypode_state: {
+      _meta: { version: 3, generation: 5, activeAccount: '$legacy' },
+      accounts: {}
+    }
+  });
+  const background = loadBackground(local);
+
+  const result = await background.request(claimVerifiedAccount('user:alice', 4));
+
+  assert.equal(result.ok, false);
+  assert.equal(result.stale, true);
+  assert.equal(result.code, 'generation-changed');
   assert.equal(local.store.vypode_state._meta.activeAccount, '$legacy');
   assert.equal(local.store.vypode_state.accounts['user:alice'], undefined);
 });

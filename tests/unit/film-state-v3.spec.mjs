@@ -60,6 +60,106 @@ test('cached user selects the matching account while an unowned legacy blob stay
   assert.equal(unowned.localStore.vypode_state.accounts.$legacy.slugs.parasite.title, 'Parasite');
 });
 
+test('an inactive cached user cannot claim a cleared legacy root during startup', async () => {
+  const runtime = createFilmStateRuntime({
+    vypode_state: {
+      _meta: { version: 3, generation: 4, activeAccount: '$legacy' },
+      accounts: {}
+    },
+    vypode_user: { username: 'Alice', active: false }
+  });
+
+  await runtime.api.init();
+
+  assert.equal(runtime.api.getAccountId(), '$legacy');
+  assert.equal(runtime.localStore.vypode_state._meta.activeAccount, '$legacy');
+  assert.equal(runtime.localStore.vypode_state.accounts['user:alice'], undefined);
+});
+
+test('an inactive user storage change cannot activate its username from legacy state', async () => {
+  const runtime = createFilmStateRuntime({
+    vypode_state: {
+      _meta: { version: 3, generation: 4, activeAccount: '$legacy' },
+      accounts: {}
+    }
+  });
+  await runtime.api.init();
+
+  runtime.localStore.vypode_user = { username: 'Alice', active: false };
+  runtime.emitStorageChange({
+    vypode_user: {
+      oldValue: null,
+      newValue: { username: 'Alice', active: false }
+    }
+  });
+  await new Promise(resolve => setTimeout(resolve, 0));
+
+  assert.equal(runtime.api.getAccountId(), '$legacy');
+  assert.equal(runtime.localStore.vypode_state._meta.activeAccount, '$legacy');
+  assert.equal(runtime.sentMessages.some(message =>
+    message.action === 'activateAccount' && message.data.accountId === 'user:alice'
+  ), false);
+});
+
+test('a session-cache update cannot replace the authoritative state account', async () => {
+  const runtime = createFilmStateRuntime({
+    vypode_state: {
+      _meta: { version: 3, generation: 4, activeAccount: 'user:bob' },
+      accounts: {
+        'user:bob': { _meta: { version: 3 }, slugs: {} }
+      }
+    }
+  });
+  await runtime.api.init();
+
+  runtime.localStore.vypode_user = { username: 'Alice', active: true };
+  runtime.emitStorageChange({
+    vypode_user: {
+      oldValue: { username: 'Bob', active: true },
+      newValue: { username: 'Alice', active: true }
+    }
+  });
+  await new Promise(resolve => setTimeout(resolve, 0));
+
+  assert.equal(runtime.api.getAccountId(), 'user:bob');
+  assert.equal(runtime.sentMessages.some(message =>
+    message.action === 'activateAccount' && message.data.accountId === 'user:alice'
+  ), false);
+});
+
+test('v3 initialization serializes activation and respects a newer clear', async () => {
+  const local = createStorageArea({
+    vypode_state: {
+      _meta: { version: 3, generation: 4, activeAccount: '$legacy' },
+      accounts: {}
+    },
+    vypode_user: { username: 'Alice', active: true }
+  });
+  const messages = [];
+  const runtime = createFilmStateRuntime({}, {}, {
+    local,
+    sync: createStorageArea(),
+    sendMessage(message) {
+      messages.push(message);
+      return Promise.resolve({
+        ok: false,
+        stale: true,
+        generation: 5,
+        activeAccount: '$legacy',
+        account: { _meta: { version: 3 }, slugs: {} }
+      });
+    }
+  });
+
+  await runtime.api.init();
+
+  assert.equal(runtime.api.getAccountId(), '$legacy');
+  assert.equal(runtime.api.getMeta().rootGeneration, 5);
+  assert.equal(messages.length, 1);
+  assert.equal(messages[0].action, 'activateAccount');
+  assert.equal(messages[0].data.generation, 4);
+});
+
 test('a newer cross-tab clear adopts the legacy account and cancels a pending stale save', async () => {
   const runtime = createFilmStateRuntime();
   await runtime.api.init('Alice');
@@ -92,6 +192,63 @@ test('a newer cross-tab clear adopts the legacy account and cancels a pending st
   const lastMerge = runtime.sentMessages.filter(message => message.action === 'mergeAccount').at(-1);
   assert.equal(lastMerge?.data.accountId, '$legacy');
   assert.equal(lastMerge?.data.generation, 1);
+});
+
+test('a verified legacy claim adopts the winning account instead of retrying over it', async () => {
+  const local = createStorageArea({
+    vypode_state: {
+      _meta: { version: 3, generation: 4, activeAccount: '$legacy' },
+      accounts: {}
+    }
+  });
+  const messages = [];
+  const runtime = createFilmStateRuntime({}, {}, {
+    local,
+    sync: createStorageArea(),
+    sendMessage(message) {
+      messages.push(message);
+      if (message.action === 'claimVerifiedAccount') {
+        return Promise.resolve({
+          ok: false,
+          stale: true,
+          code: 'active-account-changed',
+          generation: 4,
+          activeAccount: 'user:bob',
+          account: { _meta: { version: 3 }, slugs: {} }
+        });
+      }
+      return Promise.resolve({ ok: true, generation: 4, account: { _meta: { version: 3 }, slugs: {} } });
+    }
+  });
+  await runtime.api.init();
+
+  const claimed = await runtime.api.claimVerifiedAccount('Alice', 4);
+
+  assert.equal(claimed, false);
+  assert.equal(runtime.api.getAccountId(), 'user:bob');
+  const claims = messages.filter(message =>
+    message.action === 'claimVerifiedAccount'
+  );
+  assert.equal(claims.length, 1, 'a failed compare-and-set must not retry over the winning account');
+  assert.equal(claims[0].data.generation, 4);
+});
+
+test('a verified legacy claim fails closed when the worker bridge is unavailable', async () => {
+  const runtime = createFilmStateRuntime({
+    vypode_state: {
+      _meta: { version: 3, generation: 4, activeAccount: '$legacy' },
+      accounts: {}
+    }
+  });
+  await runtime.api.init();
+
+  await assert.rejects(
+    runtime.api.claimVerifiedAccount('Alice', 4),
+    /claim service is unavailable/
+  );
+  assert.equal(runtime.api.getAccountId(), '$legacy');
+  assert.equal(runtime.localStore.vypode_state._meta.activeAccount, '$legacy');
+  assert.equal(runtime.localStore.vypode_state.accounts['user:alice'], undefined);
 });
 
 test('imports validate every value before mutating the active account', async () => {

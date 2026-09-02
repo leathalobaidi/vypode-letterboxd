@@ -253,7 +253,13 @@ async function applyStateCommand(action, data) {
   const result = await getLocal(action === 'clearAll'
     ? [STATE_KEY, OUTBOX_KEY, REVIEW_UNCERTAIN_KEY]
     : [STATE_KEY]);
-  let root = normalizeRoot(result[STATE_KEY], accountId);
+  // A verified review claim must start from the authoritative reset owner.
+  // Passing its target as normalizeRoot's fallback would make missing or
+  // malformed state look as though the target had already won the claim.
+  let root = normalizeRoot(
+    result[STATE_KEY],
+    action === 'claimVerifiedAccount' ? LEGACY_ACCOUNT : accountId
+  );
 
   if (action === 'clearAll') {
     const requestedGeneration = Number(data?.generation);
@@ -347,11 +353,17 @@ async function applyStateCommand(action, data) {
     };
   }
 
+  if (action === 'claimVerifiedAccount' &&
+      (accountId === LEGACY_ACCOUNT || !Number.isSafeInteger(data?.generation) || data.generation < 0)) {
+    throw new Error('Invalid verified account claim');
+  }
+
   if (Number(data?.generation) !== root._meta.generation) {
     const activeAccount = normalizeAccountId(root._meta.activeAccount) || LEGACY_ACCOUNT;
     return {
       ok: false,
       stale: true,
+      ...(action === 'claimVerifiedAccount' ? { code: 'generation-changed' } : {}),
       generation: root._meta.generation,
       activeAccount,
       account: root.accounts[activeAccount] || freshAccount()
@@ -359,6 +371,43 @@ async function applyStateCommand(action, data) {
   }
 
   const activeAccount = normalizeAccountId(root._meta.activeAccount) || LEGACY_ACCOUNT;
+  if (action === 'claimVerifiedAccount') {
+    // Review recovery is a compare-and-set owned by the serialized worker.
+    // A caller may claim reset state, or observe that the same verified
+    // account already claimed it, but can never replace another real account.
+    if (activeAccount !== LEGACY_ACCOUNT && activeAccount !== accountId) {
+      return {
+        ok: false,
+        stale: true,
+        conflict: true,
+        code: 'active-account-changed',
+        generation: root._meta.generation,
+        activeAccount,
+        account: root.accounts[activeAccount] || freshAccount()
+      };
+    }
+    const account = root.accounts[accountId] || freshAccount();
+    root.accounts[accountId] = account;
+    root._meta.activeAccount = accountId;
+    if (activeAccount !== accountId) {
+      abortPendingReviewSubmissions(
+        pending => pending.accountId !== accountId,
+        'The active Letterboxd account changed while the review was being submitted'
+      );
+    }
+    root._meta.updatedAt = new Date().toISOString();
+    root._meta.lastWriteAt = root._meta.updatedAt;
+    root._meta.lastError = null;
+    await setLocal({ [STATE_KEY]: root });
+    return {
+      ok: true,
+      claimed: activeAccount === LEGACY_ACCOUNT,
+      generation: root._meta.generation,
+      activeAccount: accountId,
+      account
+    };
+  }
+
   if (action !== 'activateAccount' && activeAccount !== accountId) {
     // Only an explicit account activation may change ownership. A delayed
     // merge or clear-skipped command from another tab must not reclaim state
