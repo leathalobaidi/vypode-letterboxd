@@ -469,9 +469,6 @@
 
     const rawState = localResult[STORAGE_KEY];
     const cachedUser = localResult[USER_KEY];
-    const cachedActiveAccount = isRecord(cachedUser) && cachedUser.active === true
-      ? normalizeAccountId(cachedUser)
-      : null;
     // Older unscoped v2 data used the cached username as its one-time owner,
     // even when the last page had marked that cache inactive. Preserve that
     // migration rule without letting an inactive cache reclaim a cleared v3 root.
@@ -480,7 +477,7 @@
       (!Number.isFinite(rawStateVersion) || rawStateVersion < DATA_VERSION)
       ? normalizeAccountId(cachedUser)
       : null;
-    const requested = normalizeAccountId(accountHint) || cachedActiveAccount || legacyMigrationAccount;
+    const requested = normalizeAccountId(accountHint) || legacyMigrationAccount;
     const { root, migrated } = normalizeRoot(rawState, requested);
     accountId = requested || normalizeAccountId(root._meta.activeAccount) || LEGACY_ACCOUNT;
     rootGeneration = root._meta.generation;

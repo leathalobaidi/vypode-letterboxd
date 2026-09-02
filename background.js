@@ -375,6 +375,17 @@ async function applyStateCommand(action, data) {
     // Review recovery is a compare-and-set owned by the serialized worker.
     // A caller may claim reset state, or observe that the same verified
     // account already claimed it, but can never replace another real account.
+    const legacyAccount = root.accounts[LEGACY_ACCOUNT];
+    if (activeAccount === LEGACY_ACCOUNT && Object.keys(legacyAccount?.slugs || {}).length > 0) {
+      return {
+        ok: false,
+        conflict: true,
+        code: 'legacy-state-not-empty',
+        generation: root._meta.generation,
+        activeAccount,
+        account: legacyAccount
+      };
+    }
     if (activeAccount !== LEGACY_ACCOUNT && activeAccount !== accountId) {
       return {
         ok: false,

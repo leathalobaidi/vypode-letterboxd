@@ -236,6 +236,31 @@ test('a freshly verified review account can atomically claim absent state', asyn
   assert.ok(local.store.vypode_state.accounts['user:alice']);
 });
 
+test('a verified account cannot claim a nonempty legacy registry', async () => {
+  const local = sharedLocal({
+    vypode_state: {
+      _meta: { version: 3, generation: 4, activeAccount: '$legacy' },
+      accounts: {
+        $legacy: {
+          _meta: { version: 3 },
+          slugs: { arrival: { title: 'Arrival', watched: true } }
+        }
+      }
+    }
+  });
+  const background = loadBackground(local);
+
+  const result = await background.request(claimVerifiedAccount('user:alice', 4));
+
+  assert.equal(result.ok, false);
+  assert.equal(result.conflict, true);
+  assert.equal(result.code, 'legacy-state-not-empty');
+  assert.equal(result.activeAccount, '$legacy');
+  assert.equal(local.store.vypode_state._meta.activeAccount, '$legacy');
+  assert.equal(local.store.vypode_state.accounts.$legacy.slugs.arrival.watched, true);
+  assert.equal(local.store.vypode_state.accounts['user:alice'], undefined);
+});
+
 test('a verified legacy claim cannot replace an account activated before worker serialization', async () => {
   const local = sharedLocal({
     vypode_state: {

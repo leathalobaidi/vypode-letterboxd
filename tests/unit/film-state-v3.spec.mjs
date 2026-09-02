@@ -127,6 +127,26 @@ test('a session-cache update cannot replace the authoritative state account', as
   ), false);
 });
 
+test('an active session cache cannot replace a v3 account during startup', async () => {
+  const runtime = createFilmStateRuntime({
+    vypode_user: { username: 'Alice', active: true },
+    vypode_state: {
+      _meta: { version: 3, generation: 4, activeAccount: 'user:bob' },
+      accounts: {
+        'user:bob': { _meta: { version: 3 }, slugs: {} }
+      }
+    }
+  });
+
+  await runtime.api.init();
+
+  assert.equal(runtime.api.getAccountId(), 'user:bob');
+  assert.equal(runtime.localStore.vypode_state._meta.activeAccount, 'user:bob');
+  assert.equal(runtime.sentMessages.some(message =>
+    message.action === 'activateAccount' && message.data.accountId === 'user:alice'
+  ), false);
+});
+
 test('v3 initialization serializes activation and respects a newer clear', async () => {
   const local = createStorageArea({
     vypode_state: {
@@ -151,7 +171,7 @@ test('v3 initialization serializes activation and respects a newer clear', async
     }
   });
 
-  await runtime.api.init();
+  await runtime.api.init('Alice');
 
   assert.equal(runtime.api.getAccountId(), '$legacy');
   assert.equal(runtime.api.getMeta().rootGeneration, 5);
